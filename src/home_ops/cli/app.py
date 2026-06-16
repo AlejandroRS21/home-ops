@@ -10,7 +10,7 @@ Usage:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -136,7 +136,7 @@ def approve(
     try:
         with get_connection(db_path) as db:
             db.init_db()
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             db.conn.execute(
                 """INSERT INTO pending_approvals (listing_id, approved, approved_at)
                    VALUES (?, TRUE, ?)
@@ -185,15 +185,15 @@ def _run_scan(config_path: Path | None = None) -> None:
         from home_ops.scraper.dedup import compute_content_hash
 
         # Inline deterministic scoring
-        def _score_listing(l: Listing) -> float:
+        def _score_listing(listing: Listing) -> float:
             s = 50.0
-            if l.price and l.price < 300_000:
+            if listing.price and listing.price < 300_000:
                 s += 20
-            if l.m2 and l.m2 >= 80:
+            if listing.m2 and listing.m2 >= 80:
                 s += 10
-            if l.certificado_energetico_present:
+            if listing.certificado_energetico_present:
                 s += 10
-            if l.garage_price and l.garage_price > 0:
+            if listing.garage_price and listing.garage_price > 0:
                 s += 5
             return min(s, 100.0)
         scored: list[tuple[Listing, float]] = []
@@ -283,9 +283,11 @@ def _run_scan(config_path: Path | None = None) -> None:
             ).fetchone()
             if row is None:
                 continue
-            cols = ["id", "content_hash", "url", "address", "m2", "floor", "price",
-                    "garage_price", "certificado_energetico_present", "rooms", "description", "portal"]
-            data = dict(zip(cols, row))
+            cols = (
+                "id", "content_hash", "url", "address", "m2", "floor", "price",
+                "garage_price", "certificado_energetico_present", "rooms", "description", "portal"
+            )
+            data = dict(zip(cols, row, strict=True))
             listing = Listing(**data)
 
             # Use stored score if available, otherwise recompute

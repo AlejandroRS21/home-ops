@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from home_ops.models.schema import Listing, Snapshot, PriceHistory, Config
+from home_ops.models.schema import Config, Listing, PriceHistory, Snapshot
 
 
 class TestListing:
@@ -38,11 +38,10 @@ class TestListing:
 
     def test_content_hash_required(self) -> None:
         """GIVEN no content_hash WHEN creating Listing THEN error."""
-        try:
+        import pytest
+
+        with pytest.raises((TypeError, ValueError)):
             Listing()  # type: ignore[call-arg]
-            assert False, "Should have raised ValidationError"
-        except Exception:
-            pass  # Pydantic will raise ValidationError for missing required field
 
 
 class TestSnapshot:

@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 
-from home_ops.models.data_storage import DuckDBConnection, get_connection, DatabaseError
+from home_ops.models.data_storage import DatabaseError, DuckDBConnection, get_connection
 from home_ops.models.schema import Listing
 
 

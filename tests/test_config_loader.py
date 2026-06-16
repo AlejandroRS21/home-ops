@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from home_ops.config.loader import load_user_profile, load_env, load_config
+from home_ops.config.loader import load_config, load_env, load_user_profile
 
 
 def test_load_user_profile_valid() -> None:

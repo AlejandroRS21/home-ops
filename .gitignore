@@ -5,3 +5,5 @@ __pycache__/
 user_profile.yml
 snapshots/
 data/snapshots/
+.coverage
+.venv/

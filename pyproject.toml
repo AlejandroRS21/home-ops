@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "home-ops"
+version = "0.1.0"
+description = "Real estate agentic pipeline: Idealista scraper, scoring engine, Telegram alerts"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    "scrapling>=0.3.7",
+    "duckdb",
+    "litellm",
+    "python-telegram-bot",
+    "typer",
+    "pyyaml",
+    "python-dotenv",
+    "portalocker",
+]
+
+[project.optional-dependencies]
+apify = ["apify-client"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "pytest-env",
+]
+
+[project.urls]
+repository = "https://github.com/gentleman-programming/home-ops"
+
+[project.scripts]
+homeops = "home_ops.cli.app:app"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=src/home_ops --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/home_ops"]
+
+[tool.coverage.report]
+fail_under = 75

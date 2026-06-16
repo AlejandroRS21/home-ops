@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -39,15 +39,17 @@ class DuckDBConnection:
         self.close()
 
     def connect(self) -> None:
-        """Open (or create) the DuckDB database and enable WAL mode.
+        """Open (or create) the DuckDB database and attempt WAL mode.
 
-        WAL mode is only supported for file-based databases.
-        In-memory databases (:memory:) skip WAL pragma.
+        WAL mode is only supported for file-based databases and DuckDB
+        v0.10+.  Older versions or incompatible builds silently skip it.
+        In-memory databases (:memory:) skip WAL pragma entirely.
         """
         try:
             self._conn = duckdb.connect(self.db_path)
             if self.db_path != _IN_MEMORY:
-                self._conn.execute("PRAGMA enable_wal;")
+                with suppress(Exception):
+                    self._conn.execute("PRAGMA enable_wal;")
         except Exception as exc:
             raise DatabaseError(f"Failed to connect to DuckDB at {self.db_path}: {exc}") from exc
 

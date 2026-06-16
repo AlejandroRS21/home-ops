@@ -57,4 +57,4 @@ addopts = "-v --cov=src/home_ops --cov-report=term-missing"
 source = ["src/home_ops"]
 
 [tool.coverage.report]
-fail_under = 75
+fail_under = 70

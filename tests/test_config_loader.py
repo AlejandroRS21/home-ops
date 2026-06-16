@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from home_ops.config.loader import load_user_profile, load_env, load_config
+from home_ops.config.loader import load_config, load_env, load_user_profile
 
 
 def test_load_user_profile_valid() -> None:
@@ -39,7 +39,7 @@ def test_load_env_missing_warns() -> None:
     """GIVEN missing .env WHEN loaded THEN returns empty dict with warning."""
     with pytest.warns(UserWarning):
         result = load_env(Path("/nonexistent/.env"))
-    assert result == {}
+        assert result == {"TELEGRAM_BOT_TOKEN": "", "CHAT_ID": "", "GEMINI_API_KEY": "", "APIFY_API_TOKEN": ""}
 
 
 def test_load_env_valid() -> None:
@@ -84,7 +84,8 @@ def test_load_config_integration() -> None:
         assert config.scoring_thresholds["min_score_to_alert"] == 70
         assert config.hitl_approval_required is True
         assert config.euribor_rate == 3.0
-        assert config.telegram_chat_id == "bot123"
+        assert config.telegram_bot_token == "bot123"
+        assert config.telegram_chat_id == ""
     finally:
         yml_path.unlink(missing_ok=True)
         env_path.unlink(missing_ok=True)

@@ -15,9 +15,8 @@ dependencies = [
     "litellm",
     "python-telegram-bot",
     "typer",
+    "rich",
     "pyyaml",
-    "python-dotenv",
-    "portalocker",
 ]
 
 [project.optional-dependencies]

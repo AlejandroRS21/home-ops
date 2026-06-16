@@ -1,0 +1,9 @@
+*.db
+__pycache__/
+*.pyc
+.env
+user_profile.yml
+snapshots/
+data/snapshots/
+.coverage
+.venv/

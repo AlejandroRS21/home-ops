@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from home_ops.models.schema import Config, Listing, PriceHistory, Snapshot
+from home_ops.models.schema import Config, Listing
 
 
 class TestListing:
@@ -42,25 +42,6 @@ class TestListing:
 
         with pytest.raises((TypeError, ValueError)):
             Listing()  # type: ignore[call-arg]
-
-
-class TestSnapshot:
-    """Snapshot model tests."""
-
-    def test_minimal_snapshot(self) -> None:
-        """GIVEN minimal snapshot WHEN created THEN defaults set."""
-        snap = Snapshot()
-        assert snap.file_path == ""
-
-
-class TestPriceHistory:
-    """PriceHistory model tests."""
-
-    def test_minimal_price(self) -> None:
-        """GIVEN listing_id and price WHEN created THEN values match."""
-        ph = PriceHistory(listing_id=1, price=Decimal("250000.00"))
-        assert ph.listing_id == 1
-        assert ph.price == Decimal("250000.00")
 
 
 class TestConfig:

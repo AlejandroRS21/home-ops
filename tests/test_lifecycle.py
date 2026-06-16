@@ -32,10 +32,6 @@ class TestSnapshotPath:
         """GIVEN idealista url WHEN _extract_portal THEN returns idealista."""
         assert _extract_portal("https://www.idealista.com/") == "idealista"
 
-    def test_fotocasa_portal(self) -> None:
-        """GIVEN fotocasa url WHEN _extract_portal THEN returns fotocasa."""
-        assert _extract_portal("https://www.fotocasa.es/") == "fotocasa"
-
     def test_unknown_portal(self) -> None:
         """GIVEN unknown url WHEN _extract_portal THEN returns unknown."""
         assert _extract_portal("https://example.com/") == "unknown"
@@ -96,16 +92,4 @@ class TestColdStart:
             cold_start("https://example.com")
 
 
-class TestSubsequentRun:
-    """Subsequent run scraper tests."""
 
-    @patch("home_ops.scraper.lifecycle._fetch_page_text")
-    def test_subsequent_run_raises_on_fetch_failure(
-        self, mock_fetch: MagicMock
-    ) -> None:
-        """GIVEN _fetch_page_text fails WHEN subsequent_run THEN RuntimeError."""
-        from home_ops.scraper.lifecycle import subsequent_run
-
-        mock_fetch.side_effect = RuntimeError("Fetch failed")
-        with pytest.raises(RuntimeError, match="Fetch failed"):
-            subsequent_run("https://example.com")

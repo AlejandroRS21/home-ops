@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -88,26 +87,20 @@ class DuckDBConnection:
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_snapshots_id START 1;")
         self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS snapshots (
-                id INTEGER DEFAULT nextval('seq_snapshots_id') PRIMARY KEY,
-                listing_id INTEGER,
-                file_path TEXT,
-                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (listing_id) REFERENCES listings(id)
+            CREATE TABLE IF NOT EXISTS pending_approvals (
+                listing_id INTEGER PRIMARY KEY,
+                approved BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                approved_at TIMESTAMP
             );
         """)
-        self.conn.execute("CREATE SEQUENCE IF NOT EXISTS seq_price_history_id START 1;")
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS price_history (
-                id INTEGER DEFAULT nextval('seq_price_history_id') PRIMARY KEY,
-                listing_id INTEGER NOT NULL,
-                price DECIMAL(10,2) NOT NULL,
-                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (listing_id) REFERENCES listings(id)
-            );
-        """)
+        self.conn.execute(
+            "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS score DOUBLE;"
+        )
+        self.conn.execute(
+            "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS alerted BOOLEAN DEFAULT FALSE;"
+        )
 
     def insert_listing(self, listing: Listing) -> int | None:
         """Insert a listing with atomic dedup via content_hash.
@@ -160,21 +153,6 @@ class DuckDBConnection:
             return dict(zip(cols, row, strict=True))
         except Exception as exc:
             raise DatabaseError(f"Failed to get listing: {exc}") from exc
-
-    def insert_price(self, listing_id: int, price: Decimal) -> int:
-        """Record a price point in price_history."""
-        try:
-            result = self.conn.execute(
-                "INSERT INTO price_history (listing_id, price) VALUES (?, ?) RETURNING id;",
-                [listing_id, price],
-            )
-            row = result.fetchone()
-            if row is None:
-                raise DatabaseError("INSERT RETURNING returned no rows")
-            return int(row[0])
-        except Exception as exc:
-            raise DatabaseError(f"Failed to insert price: {exc}") from exc
-
 
 @contextmanager
 def get_connection(db_path: str | Path | None = None) -> Generator[DuckDBConnection, None, None]:

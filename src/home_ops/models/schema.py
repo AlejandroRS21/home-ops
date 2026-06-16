@@ -29,23 +29,6 @@ class Listing(BaseModel):
     fetched_at: datetime = Field(default_factory=datetime.now)
 
 
-class Snapshot(BaseModel):
-    """A saved HTML snapshot of a listing page."""
-
-    id: int | None = None
-    listing_id: int | None = Field(None, description="FK to listings.id")
-    file_path: str = ""
-    fetched_at: datetime = Field(default_factory=datetime.now)
-
-
-class PriceHistory(BaseModel):
-    """Record of a price change for a listing."""
-
-    listing_id: int = Field(..., description="FK to listings.id")
-    price: Decimal = Field(..., description="Price at this point in time")
-    recorded_at: datetime = Field(default_factory=datetime.now)
-
-
 class Config(BaseModel):
     """Merged application configuration from YAML + .env."""
 
@@ -57,4 +40,5 @@ class Config(BaseModel):
     alert_schedule: dict[str, str] = Field(
         default_factory=lambda: {"time": "09:00", "timezone": "Europe/Madrid"}
     )
+    telegram_bot_token: str = ""
     telegram_chat_id: str = ""

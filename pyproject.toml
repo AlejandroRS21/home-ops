@@ -17,8 +17,6 @@ dependencies = [
     "typer",
     "rich",
     "pyyaml",
-    "python-dotenv",
-    "portalocker",
 ]
 
 [project.optional-dependencies]

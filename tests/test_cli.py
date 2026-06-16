@@ -91,7 +91,6 @@ class TestCLICommands:
         self, mock_get_conn: MagicMock, mock_load_config: MagicMock
     ) -> None:
         """GIVEN approve command WHEN run with listing_id THEN approves it."""
-        from home_ops.alerter.gates import HITLGate
         from home_ops.models.data_storage import DuckDBConnection
 
         db = DuckDBConnection(":memory:")
@@ -106,8 +105,11 @@ class TestCLICommands:
         assert "approved" in result.output.lower()
 
         # Verify it's actually approved in DB
-        gate = HITLGate(db, approval_required=True)
-        assert gate.is_approved(42) is True
+        row = db.conn.execute(
+            "SELECT approved FROM pending_approvals WHERE listing_id = 42"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is True
 
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.cli.app.get_connection")

@@ -8,6 +8,7 @@ the user.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -56,22 +57,19 @@ class TelegramAlerter:
                 "CHAT_ID not set — TelegramAlerter will be a no-op."
             )
 
-        # Initialise the python-telegram-bot Application (lazy — no network I/O)
+        # Initialise the telegram Bot directly (lazy — no network I/O)
         self._app: Any = None
         if self.bot_token:
             try:
-                from telegram.ext import Application  # noqa: PLC0415
+                from telegram import Bot  # noqa: PLC0415
 
-                self._app = Application.builder().token(self.bot_token).build()
+                self._app = Bot(token=self.bot_token)
             except Exception:
-                logger.exception("Failed to build Telegram Application")
+                logger.exception("Failed to create Telegram Bot")
                 self._app = None
 
     def send_alert(self, listing: Listing, score: float) -> bool:
         """Send a Telegram message about a scored listing.
-
-        The message is only sent if ``score >= score_threshold`` (see
-        ``_score_gate``).
 
         Args:
             listing: The listing to notify about.
@@ -79,17 +77,8 @@ class TelegramAlerter:
 
         Returns:
             True if the message was sent (or would have been sent when
-            credentials are missing), False if it was gated.
+            credentials are missing), False on failure.
         """
-        if not self._score_gate(score):
-            logger.info(
-                "Score %.1f below threshold %.1f — alert gated for listing %s",
-                score,
-                self.score_threshold,
-                listing.url,
-            )
-            return False
-
         if not self._app:
             logger.info(
                 "Telegram app not available — skipping alert for %s",
@@ -99,7 +88,7 @@ class TelegramAlerter:
 
         message = self._format_listing_message(listing, score)
         try:
-            self._app.bot.send_message(chat_id=self.chat_id, text=message)
+            self._run_sync(self._app.send_message(chat_id=self.chat_id, text=message))
             logger.info("Alert sent for %s (score=%.1f)", listing.url, score)
             return True
         except Exception:
@@ -120,7 +109,7 @@ class TelegramAlerter:
             return True
 
         try:
-            self._app.bot.send_message(chat_id=self.chat_id, text=f"⚠️ {message}")
+            self._run_sync(self._app.send_message(chat_id=self.chat_id, text=f"⚠️ {message}"))
             logger.info("Failure alert sent")
             return True
         except Exception:
@@ -131,18 +120,10 @@ class TelegramAlerter:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _score_gate(self, score: float, threshold: float | None = None) -> bool:
-        """Check whether *score* meets the alert threshold.
-
-        Args:
-            score: The listing score.
-            threshold: Override threshold for this check.  Defaults to the
-                       instance's ``score_threshold``.
-
-        Returns:
-            True when ``score >= threshold``.
-        """
-        return score >= (threshold if threshold is not None else self.score_threshold)
+    @staticmethod
+    def _run_sync(coro: Any) -> Any:
+        """Run a coroutine synchronously using asyncio.run."""
+        return asyncio.run(coro)
 
     @staticmethod
     def _format_listing_message(listing: Listing, score: float) -> str:

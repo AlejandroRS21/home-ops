@@ -30,35 +30,8 @@ class TestTelegramAlerter:
         alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=85.0)
         assert alerter.score_threshold == 85.0
 
-    def test_score_gate_below_threshold(self) -> None:
-        """GIVEN score < threshold WHEN _score_gate THEN False."""
-        alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=70.0)
-        assert alerter._score_gate(50.0) is False
-
-    def test_score_gate_at_threshold(self) -> None:
-        """GIVEN score == threshold WHEN _score_gate THEN True."""
-        alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=70.0)
-        assert alerter._score_gate(70.0) is True
-
-    def test_score_gate_above_threshold(self) -> None:
-        """GIVEN score > threshold WHEN _score_gate THEN True."""
-        alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=70.0)
-        assert alerter._score_gate(95.0) is True
-
-    def test_score_gate_with_custom_threshold(self) -> None:
-        """GIVEN custom threshold arg WHEN _score_gate THEN uses it."""
-        alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=70.0)
-        assert alerter._score_gate(60.0, threshold=50.0) is True
-
-    def test_send_alert_gated(self) -> None:
-        """GIVEN score below threshold WHEN send_alert THEN returns False."""
-        alerter = TelegramAlerter(bot_token="test", chat_id="test", score_threshold=70.0)
-        listing = Listing(content_hash="abc", url="https://test.com")
-        result = alerter.send_alert(listing, score=50.0)
-        assert result is False
-
     def test_send_alert_without_credentials(self) -> None:
-        """GIVEN no credentials but score passes gate WHEN send_alert THEN returns True."""
+        """GIVEN no credentials WHEN send_alert THEN returns True (no-op)."""
         alerter = TelegramAlerter(bot_token="", chat_id="", score_threshold=50.0)
         listing = Listing(content_hash="abc", url="https://test.com")
         result = alerter.send_alert(listing, score=80.0)

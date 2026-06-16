@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -135,10 +136,13 @@ def approve(
     try:
         with get_connection(db_path) as db:
             db.init_db()
-            from home_ops.alerter.gates import HITLGate
-
-            gate = HITLGate(db, approval_required=True)
-            gate.approve(listing_id)
+            now = datetime.now(timezone.utc)
+            db.conn.execute(
+                """INSERT INTO pending_approvals (listing_id, approved, approved_at)
+                   VALUES (?, TRUE, ?)
+                   ON CONFLICT (listing_id) DO UPDATE SET approved = TRUE, approved_at = ?;""",
+                [listing_id, now, now],
+            )
             console.print(
                 f"[green]Listing {listing_id} approved. "
                 f"Alerts will be sent on next scan.[/green]"
@@ -178,10 +182,20 @@ def _run_scan(config_path: Path | None = None) -> None:
             return
 
         # 2. Deduplicate & store
-        from home_ops.scorer.rules import DeterministicScorer
         from home_ops.scraper.dedup import compute_content_hash
 
-        scorer = DeterministicScorer()
+        # Inline deterministic scoring
+        def _score_listing(l: Listing) -> float:
+            s = 50.0
+            if l.price and l.price < 300_000:
+                s += 20
+            if l.m2 and l.m2 >= 80:
+                s += 10
+            if l.certificado_energetico_present:
+                s += 10
+            if l.garage_price and l.garage_price > 0:
+                s += 5
+            return min(s, 100.0)
         scored: list[tuple[Listing, float]] = []
 
         for listing in listings:
@@ -193,6 +207,9 @@ def _run_scan(config_path: Path | None = None) -> None:
 
             inserted_id = db.insert_listing(listing)
 
+            if inserted_id is not None:
+                listing.id = inserted_id
+
             if inserted_id is None:
                 console.print(
                     f"  [dim]Skipped (duplicate): {listing.address or listing.url}[/dim]"
@@ -200,7 +217,7 @@ def _run_scan(config_path: Path | None = None) -> None:
                 continue
 
             # 3. Score
-            score = scorer.score(listing)
+            score = _score_listing(listing)
             console.print(
                 f"  [cyan]Scored:[/cyan] {listing.address or listing.url} "
                 f"→ [bold]{score:.1f}[/bold] (threshold {threshold})"
@@ -208,13 +225,12 @@ def _run_scan(config_path: Path | None = None) -> None:
             scored.append((listing, score))
 
         # 4. Alert gating
-        from home_ops.alerter.gates import HITLGate
         from home_ops.alerter.telegram import TelegramAlerter
 
-        gate = HITLGate(db, approval_required=config.hitl_approval_required)
+        approval_required = config.hitl_approval_required
         alerter = TelegramAlerter(
-            bot_token=config.telegram_chat_id or None,
-            chat_id=None,
+            bot_token=config.telegram_bot_token or None,
+            chat_id=config.telegram_chat_id or None,
             score_threshold=threshold,
         )
 
@@ -226,23 +242,63 @@ def _run_scan(config_path: Path | None = None) -> None:
                 )
                 continue
 
-            # Request HITL approval for the listing
-            if listing.id is not None:
-                gate.request_approval(listing.id)
-            else:
-                console.print("  [yellow]Listing has no id — skipping HITL check[/yellow]")
+            if listing.id is None:
+                console.print("  [yellow]Listing has no id — skipping[/yellow]")
                 continue
 
-            if not gate.is_approved(listing.id):
-                console.print(
-                    f"  [yellow]Awaiting HITL approval: listing {listing.id}[/yellow]"
+            if approval_required:
+                db.conn.execute(
+                    """INSERT INTO pending_approvals (listing_id, approved, score)
+                       VALUES (?, FALSE, ?)
+                       ON CONFLICT (listing_id) DO NOTHING;""",
+                    [listing.id, score],
                 )
-                continue
+                row = db.conn.execute(
+                    "SELECT approved FROM pending_approvals WHERE listing_id = ?",
+                    [listing.id],
+                ).fetchone()
+                if not row or not row[0]:
+                    console.print(
+                        f"  [yellow]Awaiting HITL approval: listing {listing.id}[/yellow]"
+                    )
+                    continue
 
             alerter.send_alert(listing, score)
             console.print(
                 f"  [green]Alert sent:[/green] {listing.address or listing.url} "
                 f"(score {score:.1f})"
+            )
+
+        # 5. Process approved-but-not-alerted listings from previous scans
+        pending_rows = db.conn.execute(
+            "SELECT listing_id, score FROM pending_approvals "
+            "WHERE approved = TRUE AND (alerted = FALSE OR alerted IS NULL)"
+        ).fetchall()
+
+        for listing_id, stored_score in pending_rows:
+            row = db.conn.execute(
+                "SELECT id, content_hash, url, address, m2, floor, price, "
+                "garage_price, certificado_energetico_present, rooms, description, portal "
+                "FROM listings WHERE id = ?", [listing_id]
+            ).fetchone()
+            if row is None:
+                continue
+            cols = ["id", "content_hash", "url", "address", "m2", "floor", "price",
+                    "garage_price", "certificado_energetico_present", "rooms", "description", "portal"]
+            data = dict(zip(cols, row))
+            listing = Listing(**data)
+
+            # Use stored score if available, otherwise recompute
+            score = stored_score if stored_score is not None else _score_listing(listing)
+
+            alerter.send_alert(listing, score)
+            console.print(
+                f"  [green]Alert sent (approved):[/green] {listing.address or listing.url} "
+                f"(score {score:.1f})"
+            )
+            db.conn.execute(
+                "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
+                [listing_id],
             )
 
     console.print("[bold green]Pipeline scan complete.[/bold green]")
@@ -266,10 +322,11 @@ def _display_status(config: Any) -> None:
         last_scan = last_scan_row[0] if last_scan_row else None
 
         # Pending approvals
-        from home_ops.alerter.gates import HITLGate
-
-        gate = HITLGate(db, approval_required=True)
-        pending = gate.get_pending()
+        rows = db.conn.execute(
+            "SELECT listing_id, created_at FROM pending_approvals "
+            "WHERE approved = FALSE ORDER BY created_at ASC"
+        ).fetchall()
+        pending = [{"listing_id": int(r[0]), "created_at": str(r[1])} for r in rows]
 
     # Render a summary table
     table = Table(title="Home-Ops Pipeline Status")

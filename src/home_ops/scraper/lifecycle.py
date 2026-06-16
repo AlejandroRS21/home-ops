@@ -1,18 +1,15 @@
-"""Scraper lifecycle: cold start, subsequent runs, snapshot management.
-
-Uses Scrapling for stealth HTTP fetching and portalocker for safe
-concurrent snapshot file access.
-"""
+"""Scraper lifecycle: cold start, subsequent runs, snapshot management."""
 
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import tempfile
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import portalocker
 
 from home_ops.models.schema import Listing
 
@@ -84,54 +81,15 @@ def cold_start(url: str) -> list[Listing]:
     _ensure_snapshot_dir()
     snap = _snapshot_path(_extract_portal(url))
     logger.info("Saving snapshot to %s", snap)
-    with open(snap, "w", encoding="utf-8") as f:
-        portalocker.lock(f, portalocker.LOCK_EX)
-        try:
-            f.write(html)
-        finally:
-            portalocker.unlock(f)
-
-    listing_data: list[dict[str, Any]] = _parse_listings(html)
-    return [_dict_to_listing(item) for item in listing_data]
-
-
-def subsequent_run(url: str) -> list[Listing]:
-    """Run the scraper using a persistent session with adaptive heuristics.
-
-    Uses Scrapling's AsyncStealthySession with adaptive mode and auto-save
-    enabled so that cookies, headers and other session state are maintained
-    between calls.
-
-    Args:
-        url: The portal search URL to fetch.
-
-    Returns:
-        A list of parsed Listing objects.
-
-    Raises:
-        RuntimeError: If the fetch or parse step fails.
-    """
-    # Lazy import to avoid pulling in httpx/etc. at import time
-    from scrapling import AsyncStealthySession  # noqa: PLC0415
-
-    logger.info("Subsequent run — fetching %s", url)
-    session = AsyncStealthySession(adaptive=True, auto_save=True)
-
+    fd, tmp = tempfile.mkstemp(dir=SNAPSHOT_DIR, suffix=".tmp")
     try:
-        html = _fetch_page_text(session, url)
-    finally:
-        session.close()
-
-    # Persist snapshot
-    _ensure_snapshot_dir()
-    snap = _snapshot_path(_extract_portal(url))
-    logger.info("Saving snapshot to %s", snap)
-    with open(snap, "w", encoding="utf-8") as f:
-        portalocker.lock(f, portalocker.LOCK_EX)
-        try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(html)
-        finally:
-            portalocker.unlock(f)
+        os.replace(tmp, snap)
+    except BaseException:
+        with suppress(Exception):
+            os.unlink(tmp)
+        raise
 
     listing_data: list[dict[str, Any]] = _parse_listings(html)
     return [_dict_to_listing(item) for item in listing_data]
@@ -158,11 +116,7 @@ def invalidate_snapshots() -> None:
 
 def _extract_portal(url: str) -> str:
     """Extract a short portal name from a URL."""
-    if "idealista" in url:
-        return "idealista"
-    if "fotocasa" in url:
-        return "fotocasa"
-    return "unknown"
+    return "idealista" if "idealista" in url else "unknown"
 
 
 def _parse_listings(html: str) -> list[dict[str, Any]]:

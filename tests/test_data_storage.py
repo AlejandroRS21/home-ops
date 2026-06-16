@@ -4,6 +4,7 @@ Tests use in-memory DuckDB database to avoid file I/O.
 """
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -24,14 +25,30 @@ class TestDuckDBConnection:
     """DuckDB connection lifecycle tests."""
 
     def test_connect_in_memory(self) -> None:
-        """GIVEN :memory: path WHEN connect THEN WAL mode enabled."""
+        """GIVEN :memory: path WHEN connect THEN connection is not None."""
         conn = DuckDBConnection(":memory:")
         conn.connect()
         try:
-            # WAL mode should be set without error
             assert conn.conn is not None
         finally:
             conn.close()
+
+    def test_connect_file_based(self, tmp_path: Path) -> None:
+        """GIVEN file-based path WHEN connect THEN connection works."""
+        db_file = tmp_path / "test.duckdb"
+        conn = DuckDBConnection(str(db_file))
+        conn.connect()
+        try:
+            # Connection should be established without error
+            assert conn.conn is not None
+            # The connection should accept queries
+            result = conn.conn.execute("SELECT 1").fetchone()
+            assert result is not None
+            assert result[0] == 1
+        finally:
+            conn.close()
+            if db_file.exists():
+                db_file.unlink()
 
     def test_context_manager(self) -> None:
         """GIVEN context manager WHEN used THEN connection opened and closed."""

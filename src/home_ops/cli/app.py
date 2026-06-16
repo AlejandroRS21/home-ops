@@ -349,7 +349,7 @@ def _display_status(config: Any) -> None:
         detail.add_column("Listing ID")
         detail.add_column("Created at")
         for p in pending:
-            detail.add_row(str(p["listing_id"]), p["created_at"])
+            detail.add_row(str(p["listing_id"]), str(p["created_at"]))
         console.print(table)
         console.print("\n[bold]Pending approvals:[/bold]")
         console.print(detail)

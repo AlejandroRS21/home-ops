@@ -32,25 +32,29 @@ def normalize_address(addr: str) -> str:
     return re.sub(r" {2,}", " ", addr.strip().lower()).strip()
 
 
-def compute_content_hash(address: str, m2: float | None, floor: str | None) -> str:
+def compute_content_hash(portal: str, zone: str, m2: float | None, floor: str | None) -> str:
     """Compute a SHA-256 content hash for deduplication.
 
-    The hash is built from the normalised address, the surface area in m²,
-    and the floor identifier.  This combination is stable enough to catch
-    repeat listings of the same property while tolerating minor description
-    or price changes.
+    The hash is built from the portal name, zone (neighbourhood or area),
+    surface area in m², and floor identifier.  This combination is stable
+    enough to catch repeat listings of the same property while tolerating
+    minor description or price changes.
 
     Args:
-        address: Property street address.
+        portal: Portal name (e.g. "idealista").
+        zone: Neighbourhood or area string.
         m2: Surface area in square metres (may be None).
-        floor: Floor identifier (e.g. "3B", may be None).
+        floor: Floor identifier (e.g. "planta 4ª", may be None).
 
     Returns:
-        Hexadecimal SHA-256 digest (64 characters).
+        Truncated hexadecimal SHA-256 digest (16 characters).
     """
-    norm_addr = normalize_address(address)
-    raw = f"{norm_addr}|{m2 or ''}|{floor or ''}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    raw = "|".join([
+        portal, zone,
+        str(m2) if m2 is not None else "",
+        floor if floor is not None else "",
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def is_duplicate(content_hash: str, db_connection: DuckDBConnection) -> bool:

@@ -39,7 +39,13 @@ def test_load_env_missing_warns() -> None:
     """GIVEN missing .env WHEN loaded THEN returns empty dict with warning."""
     with pytest.warns(UserWarning):
         result = load_env(Path("/nonexistent/.env"))
-        assert result == {"TELEGRAM_BOT_TOKEN": "", "CHAT_ID": "", "GEMINI_API_KEY": "", "APIFY_API_TOKEN": ""}
+        expected = {
+            "TELEGRAM_BOT_TOKEN": "",
+            "CHAT_ID": "",
+            "GEMINI_API_KEY": "",
+            "APIFY_API_TOKEN": "",
+        }
+        assert result == expected
 
 
 def test_load_env_valid() -> None:
@@ -86,6 +92,32 @@ def test_load_config_integration() -> None:
         assert config.euribor_rate == 3.0
         assert config.telegram_bot_token == "bot123"
         assert config.telegram_chat_id == ""
+        assert config.scraper.max_pages_per_scan == 5  # default when not in YAML
+    finally:
+        yml_path.unlink(missing_ok=True)
+        env_path.unlink(missing_ok=True)
+
+
+def test_load_config_custom_scraper() -> None:
+    """GIVEN scraper section in YAML WHEN load_config THEN reads max_pages_per_scan."""
+    yaml_data = {
+        "portal": {"idealista_url": "https://test.url"},
+        "scraper": {"max_pages_per_scan": 3},
+    }
+    env_data = "TELEGRAM_BOT_TOKEN=bot123\nGEMINI_API_KEY=gemini_key\nAPIFY_API_TOKEN=apify_key\n"
+
+    with (
+        tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as yf,
+        tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as ef,
+    ):
+        yaml.dump(yaml_data, yf)
+        yml_path = Path(yf.name)
+        ef.write(env_data)
+        env_path = Path(ef.name)
+
+    try:
+        config = load_config(yml_path, env_path)
+        assert config.scraper.max_pages_per_scan == 3
     finally:
         yml_path.unlink(missing_ok=True)
         env_path.unlink(missing_ok=True)

@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 
-from home_ops.models.schema import Config, Listing
+from home_ops.models.schema import Config, Listing, ScraperConfig
 
 
 class TestListing:
@@ -44,6 +44,20 @@ class TestListing:
             Listing()  # type: ignore[call-arg]
 
 
+class TestScraperConfig:
+    """ScraperConfig model tests."""
+
+    def test_default_values(self) -> None:
+        """GIVEN no args WHEN creating ScraperConfig THEN defaults are set."""
+        sc = ScraperConfig()
+        assert sc.max_pages_per_scan == 5
+
+    def test_custom_values(self) -> None:
+        """GIVEN custom max_pages WHEN creating ScraperConfig THEN value matches."""
+        sc = ScraperConfig(max_pages_per_scan=3)
+        assert sc.max_pages_per_scan == 3
+
+
 class TestConfig:
     """Config model tests."""
 
@@ -53,6 +67,7 @@ class TestConfig:
         assert cfg.hitl_approval_required is True
         assert cfg.euribor_rate == 3.5
         assert cfg.telegram_chat_id == ""
+        assert cfg.scraper.max_pages_per_scan == 5
 
     def test_custom_config(self) -> None:
         """GIVEN custom values WHEN creating Config THEN values match."""
@@ -61,8 +76,10 @@ class TestConfig:
             hitl_approval_required=False,
             euribor_rate=2.0,
             telegram_chat_id="-123456789",
+            scraper=ScraperConfig(max_pages_per_scan=3),
         )
         assert cfg.portal_url == "https://test.url"
         assert cfg.hitl_approval_required is False
         assert cfg.euribor_rate == 2.0
         assert cfg.telegram_chat_id == "-123456789"
+        assert cfg.scraper.max_pages_per_scan == 3

@@ -29,6 +29,12 @@ class Listing(BaseModel):
     fetched_at: datetime = Field(default_factory=datetime.now)
 
 
+class ScraperConfig(BaseModel):
+    """Scraper-specific configuration."""
+
+    max_pages_per_scan: int = Field(default=5, ge=1)
+
+
 class Config(BaseModel):
     """Merged application configuration from YAML + .env."""
 
@@ -40,5 +46,6 @@ class Config(BaseModel):
     alert_schedule: dict[str, str] = Field(
         default_factory=lambda: {"time": "09:00", "timezone": "Europe/Madrid"}
     )
+    scraper: ScraperConfig = Field(default_factory=ScraperConfig)
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

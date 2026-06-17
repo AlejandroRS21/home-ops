@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from home_ops.models.schema import Config
+from home_ops.models.schema import Config, ScraperConfig
 
 
 def _load_dotenv(path: Path) -> dict[str, str]:
@@ -98,6 +98,9 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
         garage_config=raw.get("garage", {}),
         euribor_rate=raw.get("euribor_rate", 3.5),
         alert_schedule=raw.get("alert_schedule", {"time": "09:00", "timezone": "Europe/Madrid"}),
+        scraper=ScraperConfig(
+            max_pages_per_scan=raw.get("scraper", {}).get("max_pages_per_scan", 5)
+        ),
         telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=secrets.get("CHAT_ID", ""),
     )

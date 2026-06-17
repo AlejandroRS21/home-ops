@@ -202,7 +202,7 @@ def _run_scan(config_path: Path | None = None) -> None:
             # Ensure content_hash is set
             if not listing.content_hash:
                 listing.content_hash = compute_content_hash(
-                    listing.address, listing.m2, listing.floor
+                    "idealista", "", listing.m2, listing.floor
                 )
 
             inserted_id = db.insert_listing(listing)

@@ -9,9 +9,12 @@ import tempfile
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from home_ops.models.schema import Listing
+from home_ops.scraper.dedup import compute_content_hash
+from home_ops.scraper.parse import parse_listings
 
 logger = logging.getLogger(__name__)
 
@@ -47,40 +50,44 @@ def _fetch_page_text(fetcher: Any, url: str) -> str:
     if page is None:
         raise RuntimeError(f"Fetcher returned None for {url}")
 
-    html: str = getattr(page, "content", None) or getattr(page, "text", "") or ""
-    if not html:
-        raise RuntimeError(f"Fetcher returned empty page for {url}")
-
-    return html
+    return cast(str, page.body.decode("utf-8"))
 
 
-def cold_start(url: str) -> list[Listing]:
-    """Fetch a portal page from scratch using Scrapling's StealthyFetcher.
+def _dicts_to_listings(dicts: list[dict[str, Any]], zone: str) -> list[Listing]:
+    """Convert raw listing dicts (from parse_listings) to Listing objects.
 
-    This is the first run against a portal — no cached snapshot is used.
-    The raw HTML is persisted to a snapshot file (with portalocker locking)
-    and then parsed into a list of Listing objects.
-
-    Args:
-        url: The portal search URL to fetch.
-
-    Returns:
-        A list of parsed Listing objects.
-
-    Raises:
-        RuntimeError: If the fetch or parse step fails.
+    Each dict gets a ``content_hash`` computed from the portal, zone, m², and
+    floor fields.
     """
-    # Lazy import so Scrapling is only pulled in when the scraper runs
-    from scrapling import StealthyFetcher  # noqa: PLC0415
+    results: list[Listing] = []
+    for item in dicts:
+        portal = item.get("portal", "idealista")
+        m2 = item.get("m2")
+        floor = item.get("floor")
+        ch = compute_content_hash(portal, zone, m2, floor)
+        results.append(
+            Listing(
+                content_hash=ch,
+                url=item.get("url", ""),
+                address=item.get("address", ""),
+                external_id=item.get("external_id"),
+                m2=m2,
+                floor=floor,
+                price=item.get("price"),
+                garage_price=item.get("garage_price"),
+                price_includes_garage=bool(item.get("price_includes_garage", False)),
+                certificado_energetico_present=item.get("certificado_energetico_present"),
+                rooms=item.get("rooms"),
+                description=item.get("description", ""),
+                portal=portal,
+            )
+        )
+    return results
 
-    logger.info("Cold start — fetching %s", url)
-    fetcher = StealthyFetcher()  # type: ignore[no-untyped-call]
-    html = _fetch_page_text(fetcher, url)
 
-    # Persist snapshot
+def _save_snapshot(snap: Path, html: str) -> None:
+    """Persist raw HTML to a snapshot file atomically."""
     _ensure_snapshot_dir()
-    snap = _snapshot_path(_extract_portal(url))
-    logger.info("Saving snapshot to %s", snap)
     fd, tmp = tempfile.mkstemp(dir=SNAPSHOT_DIR, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -91,8 +98,89 @@ def cold_start(url: str) -> list[Listing]:
             os.unlink(tmp)
         raise
 
-    listing_data: list[dict[str, Any]] = _parse_listings(html)
-    return [_dict_to_listing(item) for item in listing_data]
+
+# Module-level cache for Scrapling's StealthyFetcher.
+# Loaded lazily so external code can patch it before cold_start runs.
+_StealthyFetcher: Any = None
+
+
+def _get_fetcher() -> Any:
+    """Return a StealthyFetcher instance, loading Scrapling on first call."""
+    global _StealthyFetcher  # noqa: PLW0603
+    if _StealthyFetcher is None:
+        from scrapling import StealthyFetcher  # noqa: PLC0415
+
+        _StealthyFetcher = StealthyFetcher
+    return _StealthyFetcher()
+
+
+def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
+    """Fetch a portal page from scratch using Scrapling's StealthyFetcher.
+
+    Iterates over paginated search results up to ``max_pages`` pages.
+    Page 1 uses the base URL; pages 2+ append ``?pagina=N``.
+    Stops early if a page returns zero listings.
+
+    The raw HTML from the first page is persisted to a snapshot file.
+
+    Args:
+        url: The portal search URL to fetch.
+        zone: Neighbourhood or area name for content-hash computation.
+        max_pages: Maximum number of pages to fetch.
+
+    Returns:
+        A list of parsed Listing objects aggregated across all pages.
+
+    Raises:
+        RuntimeError: If the initial fetch or parse step fails.
+    """
+    logger.info("Cold start — fetching %s (max %d pages)", url, max_pages)
+
+    fetcher = _get_fetcher()
+    portal = _extract_portal(url)
+    snap = _snapshot_path(portal)
+    first_page = True
+
+    all_listings: list[Listing] = []
+    page_num = 0
+
+    for page_num in range(1, max_pages + 1):
+        if page_num == 1:
+            page_url = url
+        else:
+            parsed = urlparse(url)
+            query = dict(kv.split("=", 1) for kv in parsed.query.split("&") if kv)
+            query["pagina"] = str(page_num)
+            parsed = parsed._replace(query=urlencode(query))
+            page_url = urlunparse(parsed)
+        logger.info("Fetching page %d: %s", page_num, page_url)
+
+        try:
+            html = _fetch_page_text(fetcher, page_url)
+        except RuntimeError as exc:
+            logger.warning("Page %d fetch failed: %s — stopping pagination", page_num, exc)
+            break
+
+        raw_dicts = parse_listings(html)
+        logger.info("Page %d: found %d listings", page_num, len(raw_dicts))
+
+        if first_page:
+            _save_snapshot(snap, html)
+            first_page = False
+
+        if not raw_dicts:
+            logger.info("Page %d returned 0 listings — stopping pagination", page_num)
+            break
+
+        listings = _dicts_to_listings(raw_dicts, zone)
+        all_listings.extend(listings)
+
+    logger.info(
+        "Cold start complete — %d total listings across %d pages",
+        len(all_listings),
+        page_num,
+    )
+    return all_listings
 
 
 def invalidate_snapshots() -> None:
@@ -109,48 +197,10 @@ def invalidate_snapshots() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers — these are stubs that will be replaced once the actual
-# Idealista HTML structure is documented.
+# Internal helpers
 # ---------------------------------------------------------------------------
 
 
 def _extract_portal(url: str) -> str:
     """Extract a short portal name from a URL."""
     return "idealista" if "idealista" in url else "unknown"
-
-
-def _parse_listings(html: str) -> list[dict[str, Any]]:
-    """Parse listing HTML into raw dictionaries.
-
-    This is a placeholder that will be replaced with a proper HTML parser
-    (likely using Scrapling's built-in parser or BeautifulSoup) once the
-    portal's DOM structure is known.
-
-    For now it returns an empty list so the module can be imported and
-    tested without a real portal response.
-    """
-    # TODO: implement actual HTML parsing in a later milestone
-    return []
-
-
-def _dict_to_listing(item: dict[str, Any]) -> Listing:
-    """Convert a raw dictionary (from _parse_listings) to a Listing model.
-
-    This is a placeholder that will be wired once _parse_listings is
-    implemented.
-    """
-    return Listing(
-        content_hash=item.get("content_hash", ""),
-        url=item.get("url", ""),
-        address=item.get("address", ""),
-        external_id=item.get("external_id"),
-        m2=item.get("m2"),
-        floor=item.get("floor"),
-        price=item.get("price"),
-        garage_price=item.get("garage_price"),
-        price_includes_garage=bool(item.get("price_includes_garage", False)),
-        certificado_energetico_present=item.get("certificado_energetico_present"),
-        rooms=item.get("rooms"),
-        description=item.get("description", ""),
-        portal=item.get("portal", "idealista"),
-    )

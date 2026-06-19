@@ -764,6 +764,7 @@ source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
     { name = "litellm" },
+    { name = "python-dotenv" },
     { name = "python-telegram-bot" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -792,6 +793,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "pytest-env", marker = "extra == 'dev'" },
+    { name = "python-dotenv" },
     { name = "python-telegram-bot" },
     { name = "pyyaml" },
     { name = "rich" },

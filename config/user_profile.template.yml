@@ -1,0 +1,50 @@
+# Home-Ops User Profile Configuration
+# Copy this file and customize for your needs
+
+# Portal configuration
+portal:
+  idealista_url: "https://www.idealista.com/..."  # Replace with your Idealista search URL
+
+# Scoring thresholds (0-100)
+scoring_thresholds:
+  min_score_to_alert: 70
+  min_score_to_contact: 85
+
+# Multi-dimensional scoring engine configuration
+scoring:
+  thresholds:
+    price_median: 250000
+    price_over_median_penalty: 0.30
+    price_under_median_bonus: 0.20
+    m2_threshold: 80
+    m2_large_threshold: 120
+    affordability_high_ratio: 0.50
+    affordability_medium_ratio: 0.30
+    salary_province: 30000
+    weights:
+      price: 0.35
+      size: 0.25
+      energy_cert: 0.15
+      garage: 0.10
+      affordability: 0.15
+
+# Human-in-the-loop approval
+hitl_approval_required: true
+
+# Garage price configuration
+garage:
+  expected_price: 15000  # Expected garage price in EUR
+  included_in_price: false  # Is garage cost included in listing price?
+
+# Alert schedule
+alert_schedule:
+  time: "09:00"  # Daily alert time (HH:MM format)
+  timezone: "Europe/Madrid"
+  max_alerts_per_day: 5
+
+# Economic configuration
+euribor_rate: 3.5  # Current Euribor rate (%)
+
+# Scraper configuration
+scraper:
+  max_pages_per_scan: 5  # Maximum pages to scan per cold start

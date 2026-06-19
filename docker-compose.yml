@@ -1,0 +1,14 @@
+services:
+  homeops:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - HOME_OPS_CONFIG=/app/config/user_profile.yml
+    volumes:
+      - homeops-data:/app/data        # DuckDB database persists across restarts
+      - ./config:/app/config:ro       # place your user_profile.yml here
+    restart: unless-stopped
+
+volumes:
+  homeops-data:

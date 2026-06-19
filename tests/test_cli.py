@@ -1,6 +1,7 @@
 """Tests for the Typer CLI app module."""
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -580,6 +581,221 @@ class TestGetDailyAlertCount:
         assert count == 0
 
 
+class TestRunScanExtra:
+    """Additional tests for _run_scan edge cases."""
+
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_queued_alerts_from_yesterday_re_attempted(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+    ) -> None:
+        """GIVEN queued alert from yesterday WHEN scan runs THEN re-attempted."""
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 0}
+        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+        mock_send_alert.return_value = True
+
+        # Insert a listing
+        listing = Listing(
+            content_hash="queued_yesterday",
+            url="https://test.com/queued",
+            address="Calle Queued 1",
+            price=Decimal("100000"),
+            m2=80.0,
+        )
+        db.insert_listing(listing)
+
+        # Insert a queued alert from yesterday
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'queued')",
+            ["queued_yesterday", yesterday],
+        )
+
+        mock_cold_start.return_value = []  # no new listings
+
+        _run_scan()
+
+        # Alert should have been sent and status changed to 'sent'
+        row = db.conn.execute(
+            "SELECT status FROM daily_alert_log WHERE listing_hash = ?",
+            ["queued_yesterday"],
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "sent"
+        mock_send_alert.assert_called_once()
+
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_queued_re_attempt_respects_daily_quota(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+    ) -> None:
+        """GIVEN queued alerts and daily quota full WHEN scan runs THEN does not exceed quota."""
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 0}
+        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+
+        # Set max_alerts_per_day to 1
+        mock_load_config.return_value.alert_schedule.max_alerts_per_day = 1
+
+        # Insert two listings
+        for i in range(2):
+            listing = Listing(
+                content_hash=f"queued_{i}",
+                url=f"https://test.com/queued_{i}",
+                address=f"Calle Queued {i}",
+                price=Decimal("100000"),
+                m2=80.0,
+            )
+            db.insert_listing(listing)
+
+        # Insert queued alerts from yesterday for both
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        for i in range(2):
+            db.conn.execute(
+                "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'queued')",
+                [f"queued_{i}", yesterday],
+            )
+
+        mock_cold_start.return_value = []
+
+        _run_scan()
+
+        # Only 1 alert should be sent (quota is 1)
+        assert mock_send_alert.call_count <= 1
+
+        # First queued should be 'sent', second still 'queued'
+        sent = db.conn.execute(
+            "SELECT COUNT(*) FROM daily_alert_log WHERE status = 'sent' AND listing_hash LIKE 'queued_%'"
+        ).fetchone()[0]
+        assert sent == 1
+
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_todays_queued_alerts_not_re_attempted(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+    ) -> None:
+        """GIVEN queued alert from TODAY WHEN scan runs THEN not re-attempted (queued this cycle)."""
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
+        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+        mock_send_alert.return_value = True
+
+        # Insert a listing
+        listing = Listing(
+            content_hash="queued_today",
+            url="https://test.com/queued_today",
+            address="Calle Today 1",
+        )
+        db.insert_listing(listing)
+
+        # Insert a queued alert from today (no sent_at or today's date)
+        now = datetime.now(UTC)
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'queued')",
+            ["queued_today", now],
+        )
+
+        mock_cold_start.return_value = []
+
+        _run_scan()
+
+        # Alert should NOT be sent (today's queued alerts are skipped)
+        row = db.conn.execute(
+            "SELECT status FROM daily_alert_log WHERE listing_hash = ?",
+            ["queued_today"],
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "queued"  # still queued
+        mock_send_alert.assert_not_called()
+
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    def test_queued_alert_deleted_listing_removed_from_queue(
+        self,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+    ) -> None:
+        """GIVEN queued alert for deleted listing WHEN scan runs THEN queue entry deleted."""
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
+        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+
+        # Insert queued alert for a listing that doesn't exist
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'queued')",
+            ["nonexistent_hash", yesterday],
+        )
+
+        mock_cold_start.return_value = []
+
+        _run_scan()
+
+        # Queue entry should be deleted
+        row = db.conn.execute(
+            "SELECT COUNT(*) FROM daily_alert_log WHERE listing_hash = ?",
+            ["nonexistent_hash"],
+        ).fetchone()
+        assert row is not None
+        assert row[0] == 0
+
+
 class TestRunDaemonCycle:
     """Tests for _run_daemon_cycle daemon loop body."""
 
@@ -687,6 +903,62 @@ class TestRunDaemonCycle:
 
         assert result is True
         run_fn.assert_called_once()
+
+    @patch("home_ops.cli.app.get_connection")
+    def test_run_daemon_cycle_sets_failed_on_exception(self, mock_get_conn: MagicMock) -> None:
+        """GIVEN run_fn raises exception WHEN _run_daemon_cycle THEN status='failed'."""
+        from home_ops.cli.app import _run_daemon_cycle
+        from home_ops.models.schema import Config, ScheduleConfig
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+
+        run_fn = MagicMock(side_effect=RuntimeError("pipeline failed"))
+        config = Config(alert_schedule=ScheduleConfig(timezone="UTC"))
+        now = datetime(2026, 6, 18, 9, 0, 0, tzinfo=UTC)
+
+        result = _run_daemon_cycle(config, run_fn=run_fn, now=now)
+
+        assert result is True
+        row = db.conn.execute(
+            "SELECT status FROM scraping_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "failed"
+
+    @patch("home_ops.cli.app.get_connection")
+    def test_stale_running_rows_cleaned_on_cycle_start(self, mock_get_conn: MagicMock) -> None:
+        """GIVEN stale 'running' row exists WHEN cycle starts THEN marked as 'failed'."""
+        from home_ops.cli.app import _run_daemon_cycle
+        from home_ops.models.schema import Config, ScheduleConfig
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        yesterday = datetime(2026, 6, 17, 9, 0, 0, tzinfo=UTC)
+        db.conn.execute(
+            "INSERT INTO scraping_runs (started_at, status) VALUES (?, 'running')",
+            [yesterday],
+        )
+        mock_get_conn.return_value.__enter__.return_value = db
+
+        run_fn = MagicMock()
+        config = Config(alert_schedule=ScheduleConfig(timezone="UTC"))
+        now = datetime(2026, 6, 18, 9, 0, 0, tzinfo=UTC)
+
+        result = _run_daemon_cycle(config, run_fn=run_fn, now=now)
+
+        assert result is True
+        run_fn.assert_called_once()
+        row = db.conn.execute(
+            "SELECT status, finished_at FROM scraping_runs WHERE started_at = ?",
+            [yesterday],
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "failed"
+        assert row[1].astimezone(UTC) == yesterday
 
 
 class TestDaemonCommand:

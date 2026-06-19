@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.urls]
-repository = "https://github.com/gentleman-programming/home-ops"
+repository = "https://github.com/AlejandroRS21/home-ops"
 
 [project.scripts]
 homeops = "home_ops.cli.app:app"

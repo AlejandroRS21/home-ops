@@ -20,6 +20,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from home_ops.alerter.telegram import TelegramAlerter
 from home_ops.config.loader import load_config
 from home_ops.models.data_storage import get_connection
 from home_ops.models.schema import Listing, ScheduleConfig
@@ -160,10 +161,12 @@ def _run_daemon_cycle(
         db.init_db()
 
         # Cleanup stale 'running' rows from crashed/interrupted runs
+        # Use started_at as finished_at so the schedule computer sees the
+        # original timestamp, not the current time — otherwise it would
+        # think a run just completed and skip the current cycle.
         db.conn.execute(
-            "UPDATE scraping_runs SET status = 'failed', finished_at = ? "
+            "UPDATE scraping_runs SET status = 'failed', finished_at = started_at "
             "WHERE status = 'running'",
-            [now],
         )
 
         # Check if a run is already in progress (overlapping guard)
@@ -428,121 +431,121 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
                 listings = []
 
-        if not listings:
-            console.print("[yellow]No new listings found this cycle.[/yellow]")
-            return
+        # 2. Process new listings (if any)
+        if listings:
+            scored: list[tuple[Listing, float, list[str]]] = []
 
-        # 2. Deduplicate & store
-        # Note: both cold_start and subsequent_run return listings with
-        # content_hash already populated — no fallback needed.
+            for listing in listings:
+                inserted_id = db.insert_listing(listing)
 
-        scored: list[tuple[Listing, float, list[str]]] = []
+                if inserted_id is not None:
+                    listing.id = inserted_id
 
-        for listing in listings:
-            inserted_id = db.insert_listing(listing)
+                if inserted_id is None:
+                    console.print(
+                        f"  [dim]Skipped (duplicate): {listing.address or listing.url}[/dim]"
+                    )
+                    continue
 
-            if inserted_id is not None:
-                listing.id = inserted_id
-
-            if inserted_id is None:
+                # Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
+                score_result = scorer.score(listing, db_conn=db.conn)
+                score_value = score_result.total * 100.0
+                if score_result.flags:
+                    console.print(
+                        f"  [yellow]Flags:[/yellow] {', '.join(score_result.flags)}"
+                    )
                 console.print(
-                    f"  [dim]Skipped (duplicate): {listing.address or listing.url}[/dim]"
+                    f"  [cyan]Scored:[/cyan] {listing.address or listing.url} "
+                    f"→ [bold]{score_value:.1f}[/bold] (threshold {threshold})"
                 )
-                continue
+                scored.append((listing, score_value, score_result.flags))
 
-            # 3. Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
-            score_result = scorer.score(listing, db_conn=db.conn)
-            score_value = score_result.total * 100.0
-            if score_result.flags:
-                console.print(
-                    f"  [yellow]Flags:[/yellow] {', '.join(score_result.flags)}"
-                )
-            console.print(
-                f"  [cyan]Scored:[/cyan] {listing.address or listing.url} "
-                f"→ [bold]{score_value:.1f}[/bold] (threshold {threshold})"
+            # Alert gating
+            approval_required = config.hitl_approval_required
+            alerter = TelegramAlerter(
+                bot_token=config.telegram_bot_token or None,
+                chat_id=config.telegram_chat_id or None,
+                score_threshold=threshold,
             )
-            scored.append((listing, score_value, score_result.flags))
 
-        # 4. Alert gating
-        from home_ops.alerter.telegram import TelegramAlerter
+            for listing, score, flags in scored:
+                if score < threshold:
+                    console.print(
+                        f"  [dim]Alert gated (score {score:.1f} < {threshold}): "
+                        f"{listing.address or listing.url}[/dim]"
+                    )
+                    continue
 
-        approval_required = config.hitl_approval_required
+                if listing.id is None:
+                    console.print("  [yellow]Listing has no id — skipping[/yellow]")
+                    continue
+
+                if approval_required:
+                    db.conn.execute(
+                        """INSERT INTO pending_approvals (listing_id, approved, score)
+                           VALUES (?, FALSE, ?)
+                           ON CONFLICT (listing_id) DO NOTHING;""",
+                        [listing.id, score],
+                    )
+                    row = db.conn.execute(
+                        "SELECT approved FROM pending_approvals WHERE listing_id = ?",
+                        [listing.id],
+                    ).fetchone()
+                    if not row or not row[0]:
+                        console.print(
+                            f"  [yellow]Awaiting HITL approval: listing {listing.id}[/yellow]"
+                        )
+                        continue
+
+                # Check daily alert quota
+                max_per_day = config.alert_schedule.max_alerts_per_day
+                daily_count = _get_daily_alert_count(db.conn)
+                if daily_count >= max_per_day:
+                    console.print(
+                        f"  [yellow]Daily alert limit reached ({max_per_day}), "
+                        f"queued: {listing.address or listing.url}[/yellow]"
+                    )
+                    db.conn.execute(
+                        "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'queued')",
+                        [listing.content_hash],
+                    )
+                    continue
+
+                alerter.send_alert(listing, score, flags)
+                db.conn.execute(
+                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
+                    [listing.content_hash],
+                )
+                console.print(
+                    f"  [green]Alert sent:[/green] {listing.address or listing.url} "
+                    f"(score {score:.1f})"
+                )
+
+        # 3. Process approved-but-not-alerted listings from previous scans (always runs)
         alerter = TelegramAlerter(
             bot_token=config.telegram_bot_token or None,
             chat_id=config.telegram_chat_id or None,
             score_threshold=threshold,
         )
-
-        for listing, score, flags in scored:
-            if score < threshold:
-                console.print(
-                    f"  [dim]Alert gated (score {score:.1f} < {threshold}): "
-                    f"{listing.address or listing.url}[/dim]"
-                )
-                continue
-
-            if listing.id is None:
-                console.print("  [yellow]Listing has no id — skipping[/yellow]")
-                continue
-
-            if approval_required:
-                db.conn.execute(
-                    """INSERT INTO pending_approvals (listing_id, approved, score)
-                       VALUES (?, FALSE, ?)
-                       ON CONFLICT (listing_id) DO NOTHING;""",
-                    [listing.id, score],
-                )
-                row = db.conn.execute(
-                    "SELECT approved FROM pending_approvals WHERE listing_id = ?",
-                    [listing.id],
-                ).fetchone()
-                if not row or not row[0]:
-                    console.print(
-                        f"  [yellow]Awaiting HITL approval: listing {listing.id}[/yellow]"
-                    )
-                    continue
-
-            # Check daily alert quota
-            max_per_day = config.alert_schedule.max_alerts_per_day
-            daily_count = _get_daily_alert_count(db.conn)
-            if daily_count >= max_per_day:
-                console.print(
-                    f"  [yellow]Daily alert limit reached ({max_per_day}), "
-                    f"queued: {listing.address or listing.url}[/yellow]"
-                )
-                db.conn.execute(
-                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'queued')",
-                    [listing.content_hash],
-                )
-                continue
-
-            alerter.send_alert(listing, score, flags)
-            db.conn.execute(
-                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
-                [listing.content_hash],
-            )
-            console.print(
-                f"  [green]Alert sent:[/green] {listing.address or listing.url} "
-                f"(score {score:.1f})"
-            )
-
-        # 5. Process approved-but-not-alerted listings from previous scans
         pending_rows = db.conn.execute(
             "SELECT listing_id, score FROM pending_approvals "
-            "WHERE approved = TRUE AND (alerted = FALSE OR alerted IS NULL)"
+            "WHERE approved = TRUE AND (alerted = FALSE OR alerted IS NULL) "
+            "ORDER BY listing_id ASC"
         ).fetchall()
 
         for listing_id, stored_score in pending_rows:
             row = db.conn.execute(
                 "SELECT id, content_hash, url, address, m2, floor, price, "
-                "garage_price, certificado_energetico_present, rooms, description, portal "
+                "garage_price, price_includes_garage, certificado_energetico_present, "
+                "rooms, description, portal, external_id, fetched_at "
                 "FROM listings WHERE id = ?", [listing_id]
             ).fetchone()
             if row is None:
                 continue
             cols = (
                 "id", "content_hash", "url", "address", "m2", "floor", "price",
-                "garage_price", "certificado_energetico_present", "rooms", "description", "portal"
+                "garage_price", "price_includes_garage", "certificado_energetico_present",
+                "rooms", "description", "portal", "external_id", "fetched_at"
             )
             data = dict(zip(cols, row, strict=True))
             listing = Listing(**data)
@@ -567,6 +570,10 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                     "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'queued')",
                     [listing.content_hash],
                 )
+                db.conn.execute(
+                    "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
+                    [listing_id],
+                )
                 continue
 
             alerter.send_alert(listing, score, flags)
@@ -581,6 +588,64 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             db.conn.execute(
                 "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
                 [listing.content_hash],
+            )
+
+        # 4. Re-attempt queued alerts from previous days (always runs)
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        queued_rows = db.conn.execute(
+            "SELECT dlh.id, dlh.listing_hash, dlh.sent_at FROM daily_alert_log dlh "
+            "WHERE dlh.status = 'queued' AND dlh.sent_at IS NOT NULL AND dlh.sent_at < ? "
+            "ORDER BY dlh.id ASC",
+            [today_start],
+        ).fetchall()
+
+        queued_max_per_day = config.alert_schedule.max_alerts_per_day
+        for queued_id, listing_hash, _queued_at in queued_rows:
+            daily_count = _get_daily_alert_count(db.conn)
+            if daily_count >= queued_max_per_day:
+                console.print(
+                    f"  [yellow]Daily alert limit reached ({queued_max_per_day}), "
+                    f"deferred (queued): hash {listing_hash}[/yellow]"
+                )
+                break
+
+            row = db.conn.execute(
+                "SELECT id, url, address, content_hash, m2, floor, price, "
+                "garage_price, price_includes_garage, certificado_energetico_present, "
+                "rooms, description, portal, external_id, fetched_at "
+                "FROM listings WHERE content_hash = ? LIMIT 1",
+                [listing_hash],
+            ).fetchone()
+            if row is None:
+                db.conn.execute("DELETE FROM daily_alert_log WHERE id = ?", [queued_id])
+                continue
+
+            cols = (
+                "id", "url", "address", "content_hash", "m2", "floor", "price",
+                "garage_price", "price_includes_garage", "certificado_energetico_present",
+                "rooms", "description", "portal", "external_id", "fetched_at"
+            )
+            data = dict(zip(cols, row, strict=True))
+            listing = Listing(**data)
+
+            score_result = scorer.score(listing, db_conn=db.conn)
+            score_value = score_result.total * 100.0
+
+            if score_value < threshold:
+                console.print(
+                    f"  [dim]Alert gated (queued re-attempt, score {score_value:.1f} "
+                    f"< {threshold}): {listing.address or listing.url}[/dim]"
+                )
+                continue
+
+            alerter.send_alert(listing, score_value, score_result.flags)
+            db.conn.execute(
+                "UPDATE daily_alert_log SET status = 'sent', sent_at = ? WHERE id = ?",
+                [datetime.now(UTC), queued_id],
+            )
+            console.print(
+                f"  [green]Alert sent (queued re-attempt):[/green] "
+                f"{listing.address or listing.url} (score {score_value:.1f})"
             )
 
     console.print("[bold green]Pipeline scan complete.[/bold green]")

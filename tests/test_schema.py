@@ -127,3 +127,18 @@ class TestScheduleConfig:
         """GIVEN various bad timezone strings WHEN validating THEN ValueError."""
         with pytest.raises(ValueError, match="timezone"):
             ScheduleConfig(timezone=bad_timezone)
+
+    def test_max_alerts_per_day_zero_raises_error(self) -> None:
+        """GIVEN max_alerts_per_day=0 WHEN creating ScheduleConfig THEN ValueError."""
+        with pytest.raises(ValueError, match="max_alerts_per_day"):
+            ScheduleConfig(max_alerts_per_day=0)
+
+    def test_max_alerts_per_day_negative_raises_error(self) -> None:
+        """GIVEN max_alerts_per_day=-1 WHEN creating ScheduleConfig THEN ValueError."""
+        with pytest.raises(ValueError, match="max_alerts_per_day"):
+            ScheduleConfig(max_alerts_per_day=-1)
+
+    def test_max_alerts_per_day_accepts_large_number(self) -> None:
+        """GIVEN max_alerts_per_day=9999 WHEN creating ScheduleConfig THEN succeeds."""
+        sched = ScheduleConfig(max_alerts_per_day=9999)
+        assert sched.max_alerts_per_day == 9999

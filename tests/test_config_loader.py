@@ -168,6 +168,42 @@ class TestAlertScheduleYAML:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    def test_home_ops_config_env_var_used_when_path_none(self) -> None:
+        """GIVEN HOME_OPS_CONFIG env var set WHEN load_user_profile called with path=None THEN reads from env var."""
+        import os
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump({"portal": {"idealista_url": "https://env.url"}}, f)
+            env_path = f.name
+
+        try:
+            os.environ["HOME_OPS_CONFIG"] = env_path
+            result = load_user_profile()
+            assert result["portal"]["idealista_url"] == "https://env.url"
+        finally:
+            del os.environ["HOME_OPS_CONFIG"]
+            Path(env_path).unlink(missing_ok=True)
+
+    def test_home_ops_config_env_var_explicit_path_still_works(self) -> None:
+        """GIVEN HOME_OPS_CONFIG set but explicit path provided WHEN load_user_profile THEN uses explicit path."""
+        import os
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump({"portal": {"idealista_url": "https://other.url"}}, f)
+            explicit_path = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump({"portal": {"idealista_url": "https://env.url"}}, f)
+            env_path = f.name
+
+        try:
+            os.environ["HOME_OPS_CONFIG"] = env_path
+            result = load_user_profile(Path(explicit_path))
+            assert result["portal"]["idealista_url"] == "https://other.url"
+        finally:
+            del os.environ["HOME_OPS_CONFIG"]
+            Path(explicit_path).unlink(missing_ok=True)
+            Path(env_path).unlink(missing_ok=True)
+
     def test_old_time_key_backward_compat(self) -> None:
         """GIVEN old 'time' key in alert_schedule WHEN loaded THEN maps to daily_time."""
         yaml_data = {

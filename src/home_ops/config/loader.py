@@ -17,7 +17,11 @@ def load_user_profile(path: Path | None = None) -> dict[str, Any]:
     Raises FileNotFoundError if the file does not exist.
     """
     if path is None:
-        path = Path.cwd() / "user_profile.yml"
+        env_path = os.environ.get("HOME_OPS_CONFIG")
+        if env_path:
+            path = Path(env_path)
+        else:
+            path = Path.cwd() / "user_profile.yml"
 
     if not path.exists():
         raise FileNotFoundError(

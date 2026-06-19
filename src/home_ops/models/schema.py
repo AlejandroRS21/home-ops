@@ -88,6 +88,21 @@ class ScheduleConfig(BaseModel):
             raise ValueError(f"mode must be one of {allowed}, got '{v}'")
         return v
 
+    @field_validator("max_alerts_per_day")
+    @classmethod
+    def validate_max_alerts_per_day(cls, v: int) -> int:
+        """Validate max_alerts_per_day is at least 1.
+
+        A value of 0 would silently queue ALL alerts with no way to
+        re-attempt them. Use a high value for effectively unlimited.
+        """
+        if v < 1:
+            raise ValueError(
+                f"max_alerts_per_day must be >= 1, got {v}. "
+                "Set to a high value for effectively unlimited."
+            )
+        return v
+
 
 class Config(BaseModel):
     """Merged application configuration from YAML + .env."""

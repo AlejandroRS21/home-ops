@@ -18,11 +18,6 @@ _IN_MEMORY = ":memory:"
 DEFAULT_DB_PATH = Path("data/home_ops.duckdb")
 
 
-class DatabaseError(Exception):
-    """Raised on DuckDB operation failures."""
-    pass
-
-
 class DuckDBConnection:
     """DuckDB connection wrapper with schema init and atomic operations."""
 
@@ -50,7 +45,7 @@ class DuckDBConnection:
                 with suppress(Exception):
                     self._conn.execute("PRAGMA enable_wal;")
         except Exception as exc:
-            raise DatabaseError(f"Failed to connect to DuckDB at {self.db_path}: {exc}") from exc
+            raise RuntimeError(f"Failed to connect to DuckDB at {self.db_path}: {exc}") from exc
 
     def close(self) -> None:
         """Close the connection if open."""
@@ -62,7 +57,7 @@ class DuckDBConnection:
     def conn(self) -> duckdb.DuckDBPyConnection:
         """Get the underlying DuckDB connection, raising if not connected."""
         if self._conn is None:
-            raise DatabaseError("Not connected. Call connect() first or use as context manager.")
+            raise RuntimeError("Not connected. Call connect() first or use as context manager.")
         return self._conn
 
     def init_db(self) -> None:
@@ -101,6 +96,37 @@ class DuckDBConnection:
         self.conn.execute(
             "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS alerted BOOLEAN DEFAULT FALSE;"
         )
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS euribor_rate (
+                rate DOUBLE NOT NULL,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        self.conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS seq_scraping_runs_id START 1;
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS scraping_runs (
+                id INTEGER DEFAULT nextval('seq_scraping_runs_id') PRIMARY KEY,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                listings_found INTEGER DEFAULT 0,
+                listings_new INTEGER DEFAULT 0,
+                alerts_sent INTEGER DEFAULT 0,
+                status TEXT
+            );
+        """)
+        self.conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS seq_daily_alert_log_id START 1;
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_alert_log (
+                id INTEGER DEFAULT nextval('seq_daily_alert_log_id') PRIMARY KEY,
+                listing_hash TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT
+            );
+        """)
 
     def insert_listing(self, listing: Listing) -> int | None:
         """Insert a listing with atomic dedup via content_hash.
@@ -137,7 +163,7 @@ class DuckDBConnection:
             row = result.fetchone()
             return row[0] if row else None
         except Exception as exc:
-            raise DatabaseError(f"Failed to insert listing: {exc}") from exc
+            raise RuntimeError(f"Failed to insert listing: {exc}") from exc
 
     def get_listing(self, content_hash: str) -> dict[str, Any] | None:
         """Retrieve a listing by its content hash."""
@@ -152,7 +178,7 @@ class DuckDBConnection:
             cols = [desc[0] for desc in result.description]
             return dict(zip(cols, row, strict=True))
         except Exception as exc:
-            raise DatabaseError(f"Failed to get listing: {exc}") from exc
+            raise RuntimeError(f"Failed to get listing: {exc}") from exc
 
 @contextmanager
 def get_connection(db_path: str | Path | None = None) -> Generator[DuckDBConnection, None, None]:

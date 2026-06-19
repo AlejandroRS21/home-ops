@@ -9,28 +9,19 @@ import tempfile
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
-from urllib.parse import urlencode, urlparse, urlunparse
+from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from home_ops.models.schema import Listing
-from home_ops.scraper.dedup import compute_content_hash
+from home_ops.scraper.dedup import batch_known_hashes, compute_content_hash
 from home_ops.scraper.parse import parse_listings
+
+if TYPE_CHECKING:
+    from home_ops.models.data_storage import DuckDBConnection
 
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR = Path("data/snapshots")
-
-
-def _snapshot_path(portal: str, when: datetime | None = None) -> Path:
-    """Build the snapshot file path for a portal on a given date."""
-    when = when or datetime.now()
-    date_str = when.strftime("%Y%m%d")
-    return SNAPSHOT_DIR / f"{portal}_{date_str}.snap"
-
-
-def _ensure_snapshot_dir() -> None:
-    """Create the snapshot directory if it does not exist."""
-    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _fetch_page_text(fetcher: Any, url: str) -> str:
@@ -87,7 +78,7 @@ def _dicts_to_listings(dicts: list[dict[str, Any]], zone: str) -> list[Listing]:
 
 def _save_snapshot(snap: Path, html: str) -> None:
     """Persist raw HTML to a snapshot file atomically."""
-    _ensure_snapshot_dir()
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=SNAPSHOT_DIR, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -137,8 +128,8 @@ def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
     logger.info("Cold start — fetching %s (max %d pages)", url, max_pages)
 
     fetcher = _get_fetcher()
-    portal = _extract_portal(url)
-    snap = _snapshot_path(portal)
+    portal = "idealista" if "idealista" in url else "unknown"
+    snap = SNAPSHOT_DIR / f"{portal}_{datetime.now().strftime('%Y%m%d')}.snap"
     first_page = True
 
     all_listings: list[Listing] = []
@@ -183,6 +174,95 @@ def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
     return all_listings
 
 
+def subsequent_run(
+    url: str,
+    db_connection: DuckDBConnection,
+    zone: str = "",
+    max_pages: int = 5,
+    force: bool = False,
+) -> list[Listing]:
+    """Fetch a portal page incrementally, returning only new (non-duplicate) listings.
+
+    Works like ``cold_start`` but checks each listing's ``content_hash``
+    against the database via ``is_duplicate``.  Early-stops when all
+    listings on a page are already known hashes (page 2+).
+
+    Page 1 is always fetched and its HTML is written to the snapshot file.
+    Pages 2+ are fetched only when needed (or when ``force=True``).
+
+    The caller is responsible for database lifecycle and inserts — this
+    function never writes to the database.
+
+    Args:
+        url: The portal search URL to fetch.
+        db_connection: An open DuckDB connection with initialised schema.
+        zone: Zone/location filter (reserved for future use).
+        max_pages: Maximum number of pages to fetch.
+        force: If True, bypass early-stop and fetch all ``max_pages``.
+
+    Returns:
+        A list of new (non-duplicate) ``Listing`` objects.
+    """
+    logger.info("Subsequent run — fetching %s (max_pages=%d, force=%s)", url, max_pages, force)
+    fetcher = _get_fetcher()
+    portal = "idealista" if "idealista" in url else "unknown"
+    snap = SNAPSHOT_DIR / f"{portal}_{datetime.now().strftime('%Y%m%d')}.snap"
+
+    new_listings: list[Listing] = []
+
+    for page_num in range(1, max_pages + 1):
+        if page_num == 1:
+            page_url = url
+        else:
+            parsed = urlparse(url)
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            qs["pagina"] = [str(page_num)]
+            parsed = parsed._replace(query=urlencode(qs, doseq=True))
+            page_url = urlunparse(parsed)
+
+        # Fetch
+        try:
+            html = _fetch_page_text(fetcher, page_url)
+        except RuntimeError as exc:
+            logger.warning("Failed to fetch page %d: %s — stopping pagination", page_num, exc)
+            break
+
+        # Page 1 always updates snapshot
+        if page_num == 1:
+            _save_snapshot(snap, html)
+
+        # Parse
+        raw_dicts = parse_listings(html)
+        if not raw_dicts:
+            logger.info("Page %d is empty — stopping pagination", page_num)
+            break
+
+        listings = _dicts_to_listings(raw_dicts, zone)
+
+        # Separate known vs new
+        page_hashes = [listing.content_hash for listing in listings]
+        known_hashes = batch_known_hashes(db_connection, page_hashes)
+        known_count = 0
+        for listing in listings:
+            if listing.content_hash in known_hashes:
+                known_count += 1
+            else:
+                new_listings.append(listing)
+
+        # Early-stop: if ALL listings on THIS page are known and there is
+        # still content to paginate (page_num < max_pages), stop fetching
+        # further pages (unless force=True).
+        if known_count == len(listings) and page_num < max_pages and not force:
+            logger.info(
+                "Page %d all known — stopping pagination (force=%s)",
+                page_num,
+                force,
+            )
+            break
+
+    return new_listings
+
+
 def invalidate_snapshots() -> None:
     """Remove the entire snapshot directory.
 
@@ -196,11 +276,4 @@ def invalidate_snapshots() -> None:
         logger.info("Snapshot directory does not exist — nothing to remove.")
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
-
-def _extract_portal(url: str) -> str:
-    """Extract a short portal name from a URL."""
-    return "idealista" if "idealista" in url else "unknown"

@@ -111,17 +111,6 @@ def _extract_external_id(href: str | None) -> str | None:
     return None
 
 
-def _extract_text_recursive(el: Selector) -> str:
-    """Extract all text content from a Selector element recursively."""
-    pieces: list[str] = []
-    for child in el.children:
-        if child.tag is None:
-            pieces.append(str(child.text or ""))
-        else:
-            pieces.append(_extract_text_recursive(child))
-    return " ".join(pieces).strip()
-
-
 def _get_detail_texts(card: Selector) -> list[str]:
     """Extract detail texts from the item-detail-char div."""
     texts: list[str] = []
@@ -133,11 +122,6 @@ def _get_detail_texts(card: Selector) -> list[str]:
         t = span.css("::text").get("")
         if t:
             texts.append(t.strip())
-    # If no span children found, try direct text
-    if not texts:
-        raw = _extract_text_recursive(detail_div[0])
-        if raw:
-            texts = [raw]
     return texts
 
 
@@ -164,7 +148,7 @@ def parse_listings(html: str) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     sponsored_count = 0
     for card in cards:
-        tag = _selector_tag(card)
+        tag = {"attrib": dict(card.attrib)}
         if _skip_sponsored(tag):
             sponsored_count += 1
             continue
@@ -223,9 +207,4 @@ def parse_listings(html: str) -> list[dict[str, Any]]:
     return results
 
 
-def _selector_tag(sel: Selector) -> dict[str, Any]:
-    """Extract a minimal tag dict from a Scrapling Selector for use with _skip_sponsored.
 
-    Scrapling Selectors expose attributes via the ``attrib`` property (LXML-style).
-    """
-    return {"attrib": dict(sel.attrib)}

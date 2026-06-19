@@ -37,12 +37,6 @@ class TestTelegramAlerter:
         result = alerter.send_alert(listing, score=80.0)
         assert result is True
 
-    def test_send_failure_alert_without_credentials(self) -> None:
-        """GIVEN no credentials WHEN send_failure_alert THEN returns True."""
-        alerter = TelegramAlerter(bot_token="", chat_id="")
-        result = alerter.send_failure_alert("Test failure")
-        assert result is True
-
     def test_format_listing_message(self) -> None:
         """GIVEN listing and score WHEN _format_listing_message THEN formatted string."""
         listing = Listing(
@@ -59,3 +53,24 @@ class TestTelegramAlerter:
         assert "85" in message
         assert "3B" in message
         assert "test.com" in message
+
+    def test_format_listing_message_with_flags(self) -> None:
+        """GIVEN listing with flags WHEN formatted THEN includes warning line."""
+        listing = Listing(
+            content_hash="def",
+            url="https://test.com/other",
+            address="Calle Otra 456",
+            price=Decimal("180000.00"),
+            m2=60.0,
+        )
+        flags = ["certificado_missing"]
+        message = TelegramAlerter._format_listing_message(listing, 70.0, flags)
+        assert "certificado_missing" in message
+        assert "⚠️" in message
+
+    def test_send_alert_with_flags(self) -> None:
+        """GIVEN flags WHEN send_alert THEN no crash."""
+        alerter = TelegramAlerter(bot_token="", chat_id="", score_threshold=50.0)
+        listing = Listing(content_hash="ghi", url="https://test.com/flags")
+        result = alerter.send_alert(listing, score=75.0, flags=["certificado_missing"])
+        assert result is True

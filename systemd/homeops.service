@@ -1,0 +1,14 @@
+[Unit]
+Description=Home-Ops Automated Pipeline
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/homeops daemon
+WorkingDirectory=/opt/home-ops
+Restart=on-failure
+RestartSec=30
+Environment=HOME_OPS_CONFIG=/opt/home-ops/user_profile.yml
+
+[Install]
+WantedBy=multi-user.target

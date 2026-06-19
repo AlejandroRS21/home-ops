@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from home_ops.config.loader import load_config, load_env, load_user_profile
+from home_ops.models.schema import ScheduleConfig
 
 
 def test_load_user_profile_valid() -> None:
@@ -92,32 +93,101 @@ def test_load_config_integration() -> None:
         assert config.euribor_rate == 3.0
         assert config.telegram_bot_token == "bot123"
         assert config.telegram_chat_id == ""
-        assert config.scraper.max_pages_per_scan == 5  # default when not in YAML
     finally:
         yml_path.unlink(missing_ok=True)
         env_path.unlink(missing_ok=True)
 
 
-def test_load_config_custom_scraper() -> None:
-    """GIVEN scraper section in YAML WHEN load_config THEN reads max_pages_per_scan."""
-    yaml_data = {
-        "portal": {"idealista_url": "https://test.url"},
-        "scraper": {"max_pages_per_scan": 3},
-    }
-    env_data = "TELEGRAM_BOT_TOKEN=bot123\nGEMINI_API_KEY=gemini_key\nAPIFY_API_TOKEN=apify_key\n"
+class TestAlertScheduleYAML:
+    """Tests for alert_schedule YAML mapping to ScheduleConfig."""
 
-    with (
-        tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as yf,
-        tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as ef,
-    ):
-        yaml.dump(yaml_data, yf)
-        yml_path = Path(yf.name)
-        ef.write(env_data)
-        env_path = Path(ef.name)
+    def test_full_alert_section(self) -> None:
+        """GIVEN full alert_schedule section WHEN loaded THEN ScheduleConfig populated."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+            "alert_schedule": {
+                "mode": "interval",
+                "daily_time": "14:00",
+                "interval_hours": 8,
+                "timezone": "America/New_York",
+                "max_alerts_per_day": 10,
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
 
-    try:
-        config = load_config(yml_path, env_path)
-        assert config.scraper.max_pages_per_scan == 3
-    finally:
-        yml_path.unlink(missing_ok=True)
-        env_path.unlink(missing_ok=True)
+        try:
+            config = load_config(tmp_path)
+            sched = config.alert_schedule
+            assert sched.mode == "interval"
+            assert sched.daily_time == "14:00"
+            assert sched.interval_hours == 8
+            assert sched.timezone == "America/New_York"
+            assert sched.max_alerts_per_day == 10
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_missing_alert_section_uses_defaults(self) -> None:
+        """GIVEN no alert_schedule section WHEN loaded THEN defaults are used."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            sched = config.alert_schedule
+            assert sched.mode == "daily"
+            assert sched.daily_time == "09:00"
+            assert sched.timezone == "Europe/Madrid"
+            assert sched.max_alerts_per_day == 5
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_partial_alert_section_merges_defaults(self) -> None:
+        """GIVEN partial alert_schedule WHEN loaded THEN missing fields use defaults."""
+        yaml_data = {
+            "alert_schedule": {
+                "mode": "interval",
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            sched = config.alert_schedule
+            assert sched.mode == "interval"
+            assert sched.daily_time == "09:00"  # default
+            assert sched.timezone == "Europe/Madrid"  # default
+            assert sched.max_alerts_per_day == 5  # default
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_old_time_key_backward_compat(self) -> None:
+        """GIVEN old 'time' key in alert_schedule WHEN loaded THEN maps to daily_time."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+            "alert_schedule": {
+                "mode": "daily",
+                "time": "14:00",
+                "timezone": "America/New_York",
+                "max_alerts_per_day": 3,
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            sched = config.alert_schedule
+            assert sched.daily_time == "14:00"
+            assert sched.timezone == "America/New_York"
+            assert sched.max_alerts_per_day == 3
+        finally:
+            tmp_path.unlink(missing_ok=True)

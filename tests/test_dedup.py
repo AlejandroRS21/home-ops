@@ -4,34 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from home_ops.scraper.dedup import compute_content_hash, is_duplicate, normalize_address
+from home_ops.scraper.dedup import compute_content_hash
 
 if TYPE_CHECKING:
     from home_ops.models.data_storage import DuckDBConnection
-
-
-class TestNormalizeAddress:
-    """Address normalisation tests."""
-
-    def test_strip_whitespace(self) -> None:
-        """GIVEN leading/trailing whitespace WHEN normalize THEN stripped."""
-        assert normalize_address("  Calle Mayor  ") == "calle mayor"
-
-    def test_lowercase(self) -> None:
-        """GIVEN mixed case WHEN normalize THEN lowercased."""
-        assert normalize_address("Calle Mayor, 12") == "calle mayor, 12"
-
-    def test_collapse_spaces(self) -> None:
-        """GIVEN multiple spaces WHEN normalize THEN collapsed."""
-        assert normalize_address("Calle   Mayor   12") == "calle mayor 12"
-
-    def test_empty_string(self) -> None:
-        """GIVEN empty string WHEN normalize THEN empty."""
-        assert normalize_address("") == ""
-
-    def test_special_chars(self) -> None:
-        """GIVEN accented chars WHEN normalize THEN preserved."""
-        assert normalize_address("C/ Álvaro de Bazán") == "c/ álvaro de bazán"
 
 
 class TestComputeContentHash:
@@ -74,21 +50,4 @@ class TestComputeContentHash:
         assert len(h) == 16
 
 
-class TestIsDuplicate:
-    """Duplicate detection tests."""
 
-    def test_duplicate_found(self, db: DuckDBConnection) -> None:
-        """GIVEN existing hash WHEN is_duplicate THEN True."""
-        db.conn.execute(
-            "INSERT INTO listings (content_hash) VALUES (?)",
-            ["existing_hash"],
-        )
-        assert is_duplicate("existing_hash", db) is True
-
-    def test_duplicate_not_found(self, db: DuckDBConnection) -> None:
-        """GIVEN non-existing hash WHEN is_duplicate THEN False."""
-        assert is_duplicate("nonexistent", db) is False
-
-    def test_empty_hash(self, db: DuckDBConnection) -> None:
-        """GIVEN empty hash WHEN is_duplicate THEN False."""
-        assert is_duplicate("", db) is False

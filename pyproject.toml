@@ -17,6 +17,7 @@ dependencies = [
     "typer",
     "rich",
     "pyyaml",
+    "python-dotenv",
 ]
 
 [project.optional-dependencies]

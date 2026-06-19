@@ -6,29 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import dotenv_values
 
-from home_ops.models.schema import Config, ScraperConfig
-
-
-def _load_dotenv(path: Path) -> dict[str, str]:
-    """Minimal .env parser (key=value only, no interpolation)."""
-    if not path.exists():
-        warnings.warn(
-            f".env file not found at {path}. "
-            "Secrets (Telegram, Gemini, Apify tokens) will be missing. "
-            "Copy .env.example to .env and fill in your credentials.",
-            stacklevel=2,
-        )
-        return {}
-    result: dict[str, str] = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            result[key.strip()] = val.strip().strip("\"'")
-    return result
+from home_ops.models.schema import Config, ScheduleConfig, ScoringThresholds
 
 
 def load_user_profile(path: Path | None = None) -> dict[str, Any]:
@@ -59,7 +39,7 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         env_path = Path.cwd() / ".env"
 
     if env_path.exists():
-        values = _load_dotenv(env_path)
+        values = dotenv_values(env_path)
     else:
         values = {}
         warnings.warn(
@@ -91,16 +71,22 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
     raw = load_user_profile(config_path)
     secrets = load_env(env_path)
 
+    scoring_raw = raw.get("scoring", {}).get("thresholds", {})
+    scoring = ScoringThresholds(**scoring_raw) if scoring_raw else None
+
+    # Parse alert_schedule section with backward-compat for old 'time' key
+    alert_raw = raw.get("alert_schedule", {}) or {}
+    if "time" in alert_raw and "daily_time" not in alert_raw:
+        alert_raw["daily_time"] = alert_raw.pop("time")
+    schedule_config = ScheduleConfig(**alert_raw) if alert_raw else ScheduleConfig()
+
     return Config(
         portal_url=raw.get("portal", {}).get("idealista_url", ""),
         scoring_thresholds=raw.get("scoring_thresholds", {}),
+        scoring=scoring,
+        alert_schedule=schedule_config,
         hitl_approval_required=raw.get("hitl_approval_required", True),
-        garage_config=raw.get("garage", {}),
         euribor_rate=raw.get("euribor_rate", 3.5),
-        alert_schedule=raw.get("alert_schedule", {"time": "09:00", "timezone": "Europe/Madrid"}),
-        scraper=ScraperConfig(
-            max_pages_per_scan=raw.get("scraper", {}).get("max_pages_per_scan", 5)
-        ),
         telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=secrets.get("CHAT_ID", ""),
     )

@@ -7,29 +7,10 @@ property appears in consecutive scraper runs.
 from __future__ import annotations
 
 import hashlib
-import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from home_ops.models.data_storage import DuckDBConnection
-
-
-def normalize_address(addr: str) -> str:
-    """Normalise a street address for stable hashing.
-
-    Steps:
-    - Strip leading / trailing whitespace
-    - Lowercase
-    - Collapse multiple consecutive spaces into one
-    - Remove leading/trailing spaces after collapse
-
-    Args:
-        addr: Raw address string (e.g. "  Calle Mayor, 12   ").
-
-    Returns:
-        Normalised string (e.g. "calle mayor, 12").
-    """
-    return re.sub(r" {2,}", " ", addr.strip().lower()).strip()
 
 
 def compute_content_hash(portal: str, zone: str, m2: float | None, floor: str | None) -> str:
@@ -57,18 +38,27 @@ def compute_content_hash(portal: str, zone: str, m2: float | None, floor: str | 
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def is_duplicate(content_hash: str, db_connection: DuckDBConnection) -> bool:
-    """Check whether a content hash already exists in the listings table.
+def batch_known_hashes(
+    db_connection: DuckDBConnection,
+    hashes: list[str],
+) -> set[str]:
+    """Check which content hashes already exist — single batch query.
+
+    Avoids the N+1 pattern of calling ``is_duplicate`` per hash.
 
     Args:
-        content_hash: The SHA-256 digest to look up.
         db_connection: An open DuckDB connection with an initialised schema.
+        hashes: List of content hashes to check.
 
     Returns:
-        True if the hash exists, False otherwise.
+        Set of hashes that already exist in the listings table.
     """
-    row = db_connection.conn.execute(
-        "SELECT 1 FROM listings WHERE content_hash = ? LIMIT 1",
-        [content_hash],
-    ).fetchone()
-    return row is not None
+    if not hashes:
+        return set()
+
+    placeholders = ",".join("?" for _ in hashes)
+    rows = db_connection.conn.execute(
+        f"SELECT content_hash FROM listings WHERE content_hash IN ({placeholders})",
+        hashes,
+    ).fetchall()
+    return {row[0] for row in rows}

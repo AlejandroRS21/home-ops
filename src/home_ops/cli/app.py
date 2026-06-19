@@ -5,12 +5,14 @@ Usage:
     homeops status
     homeops snapshots-reset
     homeops approve <listing_id>
+    homeops daemon
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -20,7 +22,8 @@ from rich.table import Table
 
 from home_ops.config.loader import load_config
 from home_ops.models.data_storage import get_connection
-from home_ops.models.schema import Listing
+from home_ops.models.schema import Listing, ScheduleConfig
+from home_ops.scorer import RulesScorer
 
 logger = logging.getLogger(__name__)
 
@@ -62,23 +65,227 @@ def _get_db_path() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Schedule helpers
+# ---------------------------------------------------------------------------
+
+
+def _next_run_time(
+    schedule: ScheduleConfig,
+    last_run: datetime | None = None,
+    now: datetime | None = None,
+) -> datetime:
+    """Compute the next scheduled run time as a pure function.
+
+    Args:
+        schedule: The schedule configuration (mode, daily_time, interval_hours, timezone).
+        last_run: The last recorded pipeline run time, or None if never run.
+        now: The current time (injectable for testing). Defaults to UTC now.
+
+    Returns:
+        The next datetime when the pipeline should run (timezone-aware in UTC).
+    """
+    from zoneinfo import ZoneInfo
+
+    if now is None:
+        now = datetime.now(UTC)
+
+    if schedule.mode == "interval":
+        if last_run is None:
+            return now
+        return last_run + timedelta(hours=schedule.interval_hours)
+
+    # Daily mode — use the configured timezone
+    tz = ZoneInfo(schedule.timezone)
+    hour_str, min_str = schedule.daily_time.split(":", 1)
+    target_hour = int(hour_str)
+    target_min = int(min_str)
+
+    if last_run is not None:
+        # Compute next daily occurrence AFTER last_run (enables catch-up detection)
+        last_local = last_run.astimezone(tz)
+        candidate = last_local.replace(
+            hour=target_hour, minute=target_min, second=0, microsecond=0
+        )
+        if candidate <= last_local:
+            candidate += timedelta(days=1)
+    else:
+        # No prior run — return now so daemon runs immediately on first start
+        return now
+
+    return candidate.astimezone(UTC)
+
+
+def _get_daily_alert_count(conn: Any) -> int:
+    """Query the daily_alert_log for today's sent alert count.
+
+    Args:
+        conn: DuckDB connection.
+
+    Returns:
+        Number of alerts sent today with status 'sent'.
+    """
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM daily_alert_log "
+        "WHERE status = 'sent' AND sent_at >= ?",
+        [today_start],
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def _run_daemon_cycle(
+    config: Any,
+    run_fn: Any = None,
+    now: datetime | None = None,
+) -> bool:
+    """Execute one daemon cycle: check schedule and run pipeline if due.
+
+    Args:
+        config: The application Config object.
+        run_fn: Injectable run function (defaults to _run_scan).
+        now: The current time (injectable for testing). Defaults to UTC now.
+
+    Returns:
+        True if the pipeline was executed, False if skipped.
+    """
+    if run_fn is None:
+        run_fn = _run_scan
+    if now is None:
+        now = datetime.now(UTC)
+
+    schedule = config.alert_schedule
+    db_path = _get_db_path()
+
+    with get_connection(db_path) as db:
+        db.init_db()
+
+        # Cleanup stale 'running' rows from crashed/interrupted runs
+        db.conn.execute(
+            "UPDATE scraping_runs SET status = 'failed', finished_at = ? "
+            "WHERE status = 'running'",
+            [now],
+        )
+
+        # Check if a run is already in progress (overlapping guard)
+        running = db.conn.execute(
+            "SELECT COUNT(*) FROM scraping_runs WHERE status = 'running'"
+        ).fetchone()
+        if running and running[0] > 0:
+            logger.warning("Daemon cycle: previous run still in progress, skipping")
+            return False
+
+        # Get last completed run for schedule computation
+        last_row = db.conn.execute(
+            "SELECT finished_at FROM scraping_runs "
+            "WHERE status IN ('success', 'failed') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        last_run: datetime | None = last_row[0] if last_row else None
+
+        # Compute next run time
+        next_time = _next_run_time(schedule, last_run, now)
+
+        if next_time > now:
+            logger.debug("Daemon cycle: next run at %s, skipping", next_time)
+            return False
+
+        # Mark run as started
+        run_id = db.conn.execute(
+            "INSERT INTO scraping_runs (started_at, status) VALUES (?, 'running') "
+            "RETURNING id",
+            [now],
+        ).fetchone()[0]
+
+    # Execute the pipeline outside the DB context manager
+    status = "success"
+    try:
+        run_fn(None)  # run_fn accepts config_path; None = auto-discover
+    except BaseException as exc:
+        logger.error("Daemon cycle: pipeline failed: %s", exc)
+        status = "failed"
+        if not isinstance(exc, Exception):
+            raise
+    finally:
+        # Mark run as finished — always update status even on Ctrl+C
+        with get_connection(db_path) as db:
+            db.init_db()
+            db.conn.execute(
+                "UPDATE scraping_runs SET finished_at = ?, status = ? "
+                "WHERE id = ?",
+                [datetime.now(UTC), status, run_id],
+            )
+
+    return True
+
+
+def _run_daemon_inner_loop(config: Any, dry_run: bool = False) -> None:
+    """Run the daemon loop: check schedule every 60s, execute when due.
+
+    Args:
+        config: The application Config object.
+        dry_run: If True, only print the next scheduled time and exit.
+    """
+    schedule = config.alert_schedule
+    now = datetime.now(UTC)
+
+    # Compute next run for dry-run or initial display
+    db_path = _get_db_path()
+    with get_connection(db_path) as db:
+        db.init_db()
+        last_row = db.conn.execute(
+            "SELECT finished_at FROM scraping_runs "
+            "WHERE status IN ('success', 'failed') ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        last_run: datetime | None = last_row[0] if last_row else None
+
+    next_time = _next_run_time(schedule, last_run, now)
+    console.print(f"[cyan]Schedule mode:[/cyan] {schedule.mode}")
+    console.print(f"[cyan]Next scheduled run:[/cyan] {next_time}")
+
+    if dry_run:
+        console.print("[green]Dry-run complete. No loop started.[/green]")
+        return
+
+    console.print("[green]Daemon loop started. Press Ctrl+C to stop.[/green]")
+
+    try:
+        while True:
+            cycle_now = datetime.now(UTC)
+            _run_daemon_cycle(config, now=cycle_now)
+            time.sleep(60)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Daemon stopped by user.[/yellow]")
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
+
+
+ForceOpt = Annotated[
+    bool,
+    typer.Option(
+        "--force",
+        "-f",
+        help="Force full scan bypassing early-stop pagination",
+    ),
+]
 
 
 @app.command()
 def scan(
     config_path: ConfigPathArg = None,
+    force: ForceOpt = False,
 ) -> None:
     """Run the full pipeline: scrape → deduplicate → score → alert.
 
-    Loads configuration, executes a cold-start scrape of the portal,
-    inserts new listings into the database, scores each listing with
-    the deterministic rules engine, and alerts via Telegram when the
-    score meets the configured threshold and HITL approval is granted.
+    Loads configuration, executes a cold-start or incremental scrape of
+    the portal (auto-detected from database state), inserts new listings
+    into the database, scores each listing with the deterministic rules
+    engine, and alerts via Telegram when the score meets the configured
+    threshold and HITL approval is granted.
     """
     try:
-        _run_scan(config_path)
+        _run_scan(config_path, force)
     except Exception as exc:
         console.print(f"[bold red]Pipeline failed:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -152,59 +359,86 @@ def approve(
         raise typer.Exit(code=1) from exc
 
 
+@app.command()
+def daemon(
+    config_path: ConfigOpt = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print next scheduled run and exit without starting the loop",
+        ),
+    ] = False,
+) -> None:
+    """Run the automated pipeline daemon.
+
+    Loads configuration, checks the alert_schedule, and runs the pipeline
+    on a configurable schedule (daily or interval mode). Supports
+    catch-up recovery, overlapping-run protection, and daily alert quotas.
+    """
+    try:
+        config = load_config(config_path)
+        _run_daemon_inner_loop(config, dry_run=dry_run)
+    except Exception as exc:
+        console.print(f"[bold red]Daemon failed:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 # ---------------------------------------------------------------------------
 # Internal pipeline logic
 # ---------------------------------------------------------------------------
 
 
-def _run_scan(config_path: Path | None = None) -> None:
+def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
     """Orchestrate one pipeline scan cycle."""
     config = load_config(config_path)
 
-    threshold: float = float(config.scoring_thresholds.get("min_score_to_alert", 70))
+    # Prefer the new typed ScoringThresholds path; fall back to legacy dict
+    if config.scoring is not None:
+        threshold = config.scoring.min_score_to_alert
+    else:
+        threshold = float(config.scoring_thresholds.get("min_score_to_alert", 70.0))
+    scorer = RulesScorer(config)
 
     db_path = _get_db_path()
     with get_connection(db_path) as db:
         db.init_db()
 
-        # 1. Scrape
+        # 1. Auto-detect: cold start (empty DB) vs subsequent run
         console.print("[bold]Scanning portal...[/bold]")
-        from home_ops.scraper.lifecycle import cold_start
+        row = db.conn.execute("SELECT COUNT(*) FROM listings").fetchone()
+        has_data = row is not None and row[0] is not None and row[0] != 0
 
-        try:
-            listings: list[Listing] = cold_start(config.portal_url)
-        except Exception as exc:
-            console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
-            listings = []
+        if has_data:
+            from home_ops.scraper.lifecycle import subsequent_run
+
+            try:
+                listings: list[Listing] = subsequent_run(
+                    config.portal_url, db, max_pages=5, force=force
+                )
+            except Exception as exc:
+                console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
+                listings = []
+        else:
+            from home_ops.scraper.lifecycle import cold_start
+
+            try:
+                listings = cold_start(config.portal_url)
+            except Exception as exc:
+                console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
+                listings = []
 
         if not listings:
             console.print("[yellow]No new listings found this cycle.[/yellow]")
             return
 
         # 2. Deduplicate & store
-        from home_ops.scraper.dedup import compute_content_hash
+        # Note: both cold_start and subsequent_run return listings with
+        # content_hash already populated — no fallback needed.
 
-        # Inline deterministic scoring
-        def _score_listing(listing: Listing) -> float:
-            s = 50.0
-            if listing.price and listing.price < 300_000:
-                s += 20
-            if listing.m2 and listing.m2 >= 80:
-                s += 10
-            if listing.certificado_energetico_present:
-                s += 10
-            if listing.garage_price and listing.garage_price > 0:
-                s += 5
-            return min(s, 100.0)
-        scored: list[tuple[Listing, float]] = []
+        scored: list[tuple[Listing, float, list[str]]] = []
 
         for listing in listings:
-            # Ensure content_hash is set
-            if not listing.content_hash:
-                listing.content_hash = compute_content_hash(
-                    "idealista", "", listing.m2, listing.floor
-                )
-
             inserted_id = db.insert_listing(listing)
 
             if inserted_id is not None:
@@ -216,13 +450,18 @@ def _run_scan(config_path: Path | None = None) -> None:
                 )
                 continue
 
-            # 3. Score
-            score = _score_listing(listing)
+            # 3. Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
+            score_result = scorer.score(listing, db_conn=db.conn)
+            score_value = score_result.total * 100.0
+            if score_result.flags:
+                console.print(
+                    f"  [yellow]Flags:[/yellow] {', '.join(score_result.flags)}"
+                )
             console.print(
                 f"  [cyan]Scored:[/cyan] {listing.address or listing.url} "
-                f"→ [bold]{score:.1f}[/bold] (threshold {threshold})"
+                f"→ [bold]{score_value:.1f}[/bold] (threshold {threshold})"
             )
-            scored.append((listing, score))
+            scored.append((listing, score_value, score_result.flags))
 
         # 4. Alert gating
         from home_ops.alerter.telegram import TelegramAlerter
@@ -234,7 +473,7 @@ def _run_scan(config_path: Path | None = None) -> None:
             score_threshold=threshold,
         )
 
-        for listing, score in scored:
+        for listing, score, flags in scored:
             if score < threshold:
                 console.print(
                     f"  [dim]Alert gated (score {score:.1f} < {threshold}): "
@@ -263,7 +502,25 @@ def _run_scan(config_path: Path | None = None) -> None:
                     )
                     continue
 
-            alerter.send_alert(listing, score)
+            # Check daily alert quota
+            max_per_day = config.alert_schedule.max_alerts_per_day
+            daily_count = _get_daily_alert_count(db.conn)
+            if daily_count >= max_per_day:
+                console.print(
+                    f"  [yellow]Daily alert limit reached ({max_per_day}), "
+                    f"queued: {listing.address or listing.url}[/yellow]"
+                )
+                db.conn.execute(
+                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'queued')",
+                    [listing.content_hash],
+                )
+                continue
+
+            alerter.send_alert(listing, score, flags)
+            db.conn.execute(
+                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
+                [listing.content_hash],
+            )
             console.print(
                 f"  [green]Alert sent:[/green] {listing.address or listing.url} "
                 f"(score {score:.1f})"
@@ -290,10 +547,29 @@ def _run_scan(config_path: Path | None = None) -> None:
             data = dict(zip(cols, row, strict=True))
             listing = Listing(**data)
 
-            # Use stored score if available, otherwise recompute
-            score = stored_score if stored_score is not None else _score_listing(listing)
+            # Re-score to get flags; use stored score when available
+            score_result = scorer.score(listing, db_conn=db.conn)
+            flags = score_result.flags
+            if stored_score is not None:
+                score = stored_score
+            else:
+                score = score_result.total * 100.0
 
-            alerter.send_alert(listing, score)
+            # Check daily alert quota
+            max_per_day = config.alert_schedule.max_alerts_per_day
+            daily_count = _get_daily_alert_count(db.conn)
+            if daily_count >= max_per_day:
+                console.print(
+                    f"  [yellow]Daily alert limit reached ({max_per_day}), "
+                    f"queued (approved): {listing.address or listing.url}[/yellow]"
+                )
+                db.conn.execute(
+                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'queued')",
+                    [listing.content_hash],
+                )
+                continue
+
+            alerter.send_alert(listing, score, flags)
             console.print(
                 f"  [green]Alert sent (approved):[/green] {listing.address or listing.url} "
                 f"(score {score:.1f})"
@@ -301,6 +577,10 @@ def _run_scan(config_path: Path | None = None) -> None:
             db.conn.execute(
                 "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
                 [listing_id],
+            )
+            db.conn.execute(
+                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
+                [listing.content_hash],
             )
 
     console.print("[bold green]Pipeline scan complete.[/bold green]")

@@ -25,7 +25,6 @@ class TelegramAlerter:
 
         alerter = TelegramAlerter()
         alerter.send_alert(listing, score=85.0)
-        alerter.send_failure_alert("Scraper crashed after 5 retries.")
     """
 
     def __init__(
@@ -68,12 +67,13 @@ class TelegramAlerter:
                 logger.exception("Failed to create Telegram Bot")
                 self._app = None
 
-    def send_alert(self, listing: Listing, score: float) -> bool:
+    def send_alert(self, listing: Listing, score: float, flags: list[str] | None = None) -> bool:
         """Send a Telegram message about a scored listing.
 
         Args:
             listing: The listing to notify about.
             score: The combined score for this listing (0–100).
+            flags: Optional scoring flags (warnings) to include in the message.
 
         Returns:
             True if the message was sent (or would have been sent when
@@ -86,34 +86,13 @@ class TelegramAlerter:
             )
             return True  # Silently accept when credentials are missing
 
-        message = self._format_listing_message(listing, score)
+        message = self._format_listing_message(listing, score, flags)
         try:
             self._run_sync(self._app.send_message(chat_id=self.chat_id, text=message))
             logger.info("Alert sent for %s (score=%.1f)", listing.url, score)
             return True
         except Exception:
             logger.exception("Failed to send Telegram alert for %s", listing.url)
-            return False
-
-    def send_failure_alert(self, message: str) -> bool:
-        """Send an error notification to the configured chat.
-
-        Args:
-            message: The error text to send.
-
-        Returns:
-            True if the message was sent, False on failure.
-        """
-        if not self._app:
-            logger.info("Telegram app not available — skipping failure alert.")
-            return True
-
-        try:
-            self._run_sync(self._app.send_message(chat_id=self.chat_id, text=f"⚠️ {message}"))
-            logger.info("Failure alert sent")
-            return True
-        except Exception:
-            logger.exception("Failed to send failure alert")
             return False
 
     # ------------------------------------------------------------------
@@ -126,12 +105,13 @@ class TelegramAlerter:
         return asyncio.run(coro)
 
     @staticmethod
-    def _format_listing_message(listing: Listing, score: float) -> str:
+    def _format_listing_message(listing: Listing, score: float, flags: list[str] | None = None) -> str:
         """Format a listing as a human-readable Telegram message.
 
         Args:
             listing: The listing to format.
             score: The computed score.
+            flags: Optional scoring flags to include as warnings.
 
         Returns:
             A plain-text message suitable for ``send_message``.
@@ -142,6 +122,8 @@ class TelegramAlerter:
             f"📐 {listing.m2 or '?'} m² · {listing.floor or '?'}ª planta",
             f"⭐ Score: {score:.0f}/100",
         ]
+        if flags:
+            parts.append(f"⚠️ {' · '.join(flags)}")
         if listing.url:
             parts.append(f"🔗 {listing.url}")
         return "\n".join(parts)

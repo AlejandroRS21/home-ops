@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from home_ops.models.data_storage import DatabaseError, DuckDBConnection, get_connection
+from home_ops.models.data_storage import DuckDBConnection, get_connection
 from home_ops.models.schema import Listing
 
 
@@ -66,7 +66,7 @@ class TestDuckDBConnection:
     def test_conn_property_raises_when_not_connected(self) -> None:
         """GIVEN unconnected DB WHEN accessing conn THEN DatabaseError."""
         conn = DuckDBConnection(":memory:")
-        with pytest.raises(DatabaseError, match="Not connected"):
+        with pytest.raises(RuntimeError, match="Not connected"):
             _ = conn.conn
 
     def test_init_db_creates_tables(self, db: DuckDBConnection) -> None:
@@ -77,10 +77,84 @@ class TestDuckDBConnection:
         table_names = {t[0] for t in tables}
         assert "listings" in table_names
         assert "pending_approvals" in table_names
+        assert "scraping_runs" in table_names
+        assert "daily_alert_log" in table_names
 
     def test_init_db_idempotent(self, db: DuckDBConnection) -> None:
         """GIVEN inited DB WHEN init_db called again THEN no error."""
         db.init_db()  # second call should not raise
+
+
+class TestNewTables:
+    """Tests for scraping_runs and daily_alert_log tables."""
+
+    def test_scraping_runs_insert_and_query(self, db: DuckDBConnection) -> None:
+        """GIVEN scraping_runs table WHEN inserting row THEN round-trips."""
+        db.conn.execute(
+            """INSERT INTO scraping_runs (started_at, finished_at, listings_found, listings_new, alerts_sent, status)
+               VALUES ('2026-01-01 10:00:00', '2026-01-01 10:05:00', 10, 3, 2, 'success')"""
+        )
+        rows = db.conn.execute("SELECT * FROM scraping_runs").fetchall()
+        assert len(rows) == 1
+        assert rows[0][3] == 10  # listings_found
+        assert rows[0][4] == 3   # listings_new
+        assert rows[0][5] == 2   # alerts_sent
+        assert rows[0][6] == "success"
+
+    def test_scraping_runs_auto_increment_id(self, db: DuckDBConnection) -> None:
+        """GIVEN scraping_runs WHEN inserting multiple rows THEN id auto-increments."""
+        db.conn.execute(
+            """INSERT INTO scraping_runs (started_at, finished_at, status)
+               VALUES ('2026-01-01 10:00:00', '2026-01-01 10:05:00', 'success')"""
+        )
+        db.conn.execute(
+            """INSERT INTO scraping_runs (started_at, finished_at, status)
+               VALUES ('2026-01-02 10:00:00', '2026-01-02 10:05:00', 'failed')"""
+        )
+        rows = db.conn.execute("SELECT id, status FROM scraping_runs ORDER BY id").fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == 1
+        assert rows[1][0] == 2
+
+    def test_daily_alert_log_insert_and_query(self, db: DuckDBConnection) -> None:
+        """GIVEN daily_alert_log table WHEN inserting THEN sent_at defaults."""
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, status) VALUES ('hash001', 'sent')"
+        )
+        row = db.conn.execute(
+            "SELECT listing_hash, status FROM daily_alert_log WHERE listing_hash = 'hash001'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "hash001"
+        assert row[1] == "sent"
+
+    def test_daily_alert_log_sent_at_defaults_now(self, db: DuckDBConnection) -> None:
+        """GIVEN daily_alert_log insert WHEN sent_at omitted THEN defaults to timestamp."""
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, status) VALUES ('hash002', 'sent')"
+        )
+        row = db.conn.execute(
+            "SELECT sent_at FROM daily_alert_log WHERE listing_hash = 'hash002'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is not None  # sent_at should be a timestamp
+
+    def test_daily_alert_log_count_for_today(self, db: DuckDBConnection) -> None:
+        """GIVEN daily_alert_log entries TODAY WHEN counting THEN returns correct count."""
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, status) VALUES ('h1', 'sent')"
+        )
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, status) VALUES ('h2', 'sent')"
+        )
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, status) VALUES ('h3', 'queued')"
+        )
+        count = db.conn.execute(
+            "SELECT COUNT(*) FROM daily_alert_log WHERE status = 'sent'"
+        ).fetchone()
+        assert count is not None
+        assert count[0] == 2
 
 
 class TestInsertListing:

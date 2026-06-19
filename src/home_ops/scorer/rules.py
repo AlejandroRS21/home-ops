@@ -13,13 +13,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 import pydantic
 
 from home_ops.models.schema import Config, Listing
 from home_ops.scorer.affordability import score_affordability
 from home_ops.scorer.models import DimensionScore, ScoreResult
+
+logger = logging.getLogger(__name__)
 
 
 class RulesScorer:

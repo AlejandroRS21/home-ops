@@ -553,10 +553,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             # Re-score to get flags; use stored score when available
             score_result = scorer.score(listing, db_conn=db.conn)
             flags = score_result.flags
-            if stored_score is not None:
-                score = stored_score
-            else:
-                score = score_result.total * 100.0
+            score = stored_score if stored_score is not None else score_result.total * 100.0
 
             # Check daily alert quota
             max_per_day = config.alert_schedule.max_alerts_per_day

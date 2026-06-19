@@ -105,7 +105,9 @@ class TelegramAlerter:
         return asyncio.run(coro)
 
     @staticmethod
-    def _format_listing_message(listing: Listing, score: float, flags: list[str] | None = None) -> str:
+    def _format_listing_message(
+        listing: Listing, score: float, flags: list[str] | None = None
+    ) -> str:
         """Format a listing as a human-readable Telegram message.
 
         Args:

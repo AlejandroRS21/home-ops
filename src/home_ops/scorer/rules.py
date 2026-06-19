@@ -11,7 +11,7 @@ import logging
 import math
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pydantic
 
@@ -48,7 +48,7 @@ class RulesScorer:
 
             self.thresholds = ScoringThresholds()
         else:
-            self.thresholds = scoring
+            self.thresholds = cast("ScoringThresholds", scoring)
 
         self.weights = dict(self.thresholds.weights)
         self._validate_weights()

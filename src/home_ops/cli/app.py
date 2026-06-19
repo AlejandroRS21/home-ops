@@ -192,11 +192,13 @@ def _run_daemon_cycle(
             return False
 
         # Mark run as started
-        run_id = db.conn.execute(
+        row = db.conn.execute(
             "INSERT INTO scraping_runs (started_at, status) VALUES (?, 'running') "
             "RETURNING id",
             [now],
-        ).fetchone()[0]
+        ).fetchone()
+        assert row is not None  # RETURNING always returns a row
+        run_id = row[0]
 
     # Execute the pipeline outside the DB context manager
     status = "success"

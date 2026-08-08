@@ -79,12 +79,12 @@ class TelegramAlerter:
             True if the message was sent (or would have been sent when
             credentials are missing), False on failure.
         """
-        if not self._app:
-            logger.info(
-                "Telegram app not available — skipping alert for %s",
+        if not self.bot_token or not self.chat_id or not self._app:
+            logger.error(
+                "Telegram credentials or app missing/invalid — failing alert for %s",
                 listing.url,
             )
-            return True  # Silently accept when credentials are missing
+            return False
 
         message = self._format_listing_message(listing, score, flags)
         try:

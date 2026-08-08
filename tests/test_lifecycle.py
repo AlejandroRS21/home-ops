@@ -61,12 +61,12 @@ class TestColdStart:
     def test_cold_start_raises_on_fetch_failure(
         self, mock_fetch: MagicMock, mock_get_fetcher: MagicMock
     ) -> None:
-        """GIVEN _fetch_page_text fails WHEN cold_start THEN returns empty gracefully."""
+        """GIVEN _fetch_page_text fails WHEN cold_start THEN re-raises exception."""
         from home_ops.scraper.lifecycle import cold_start
 
         mock_fetch.side_effect = RuntimeError("Fetch failed")
-        result = cold_start("https://example.com")
-        assert result == []
+        with pytest.raises(RuntimeError, match="Fetch failed"):
+            cold_start("https://example.com")
 
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._fetch_page_text")

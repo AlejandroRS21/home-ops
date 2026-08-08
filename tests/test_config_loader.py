@@ -36,31 +36,58 @@ def test_load_user_profile_missing() -> None:
 
 
 def test_load_env_missing_warns() -> None:
-    """GIVEN missing .env WHEN loaded THEN returns empty dict with warning."""
-    with pytest.warns(UserWarning):
+    """GIVEN missing .env WHEN loaded THEN returns telegram-only dict with warning."""
+    with pytest.warns(UserWarning) as record:
         result = load_env(Path("/nonexistent/.env"))
-        expected = {
-            "TELEGRAM_BOT_TOKEN": "",
-            "CHAT_ID": "",
-            "GEMINI_API_KEY": "",
-            "APIFY_API_TOKEN": "",
-        }
-        assert result == expected
+    # Dead API keys (Gemini/Apify) must not be part of the secrets surface.
+    expected = {
+        "TELEGRAM_BOT_TOKEN": "",
+        "CHAT_ID": "",
+    }
+    assert result == expected
+    message = str(record[0].message)
+    assert "Telegram" in message
+    assert "Gemini" not in message
+    assert "Apify" not in message
 
 
 def test_load_env_valid() -> None:
-    """GIVEN valid .env WHEN loaded THEN returns secrets dict."""
+    """GIVEN valid .env WHEN loaded THEN returns telegram secrets only."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
         f.write("TELEGRAM_BOT_TOKEN=test_token\n")
-        f.write("GEMINI_API_KEY=test_key\n")
-        f.write("APIFY_API_TOKEN=test_apify\n")
+        f.write("TELEGRAM_CHAT_ID=chat_999\n")
         tmp_path = Path(f.name)
 
     try:
         result = load_env(tmp_path)
         assert result["TELEGRAM_BOT_TOKEN"] == "test_token"
-        assert result["GEMINI_API_KEY"] == "test_key"
-        assert result["APIFY_API_TOKEN"] == "test_apify"
+        assert result["CHAT_ID"] == "chat_999"
+        # Dead keys must not leak into the secrets surface.
+        assert "GEMINI_API_KEY" not in result
+        assert "APIFY_API_TOKEN" not in result
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def test_load_env_excludes_dead_api_keys() -> None:
+    """GIVEN .env still references purged keys WHEN loaded THEN they are absent.
+
+    Even if a user's stale .env contains Gemini/Apify tokens, load_env MUST NOT
+    expose them — the keys were purged from the config surface (CONT-004).
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("TELEGRAM_BOT_TOKEN=bot123\n")
+        f.write("GEMINI_API_KEY=should_not_appear\n")
+        f.write("APIFY_API_TOKEN=should_not_appear\n")
+        tmp_path = Path(f.name)
+
+    try:
+        result = load_env(tmp_path)
+        assert result["TELEGRAM_BOT_TOKEN"] == "bot123"
+        assert result["CHAT_ID"] == ""
+        assert "GEMINI_API_KEY" not in result
+        assert "APIFY_API_TOKEN" not in result
+        assert set(result.keys()) == {"TELEGRAM_BOT_TOKEN", "CHAT_ID"}
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -73,7 +100,7 @@ def test_load_config_integration() -> None:
         "hitl_approval_required": True,
         "euribor_rate": 3.0,
     }
-    env_data = "TELEGRAM_BOT_TOKEN=bot123\nGEMINI_API_KEY=gemini_key\nAPIFY_API_TOKEN=apify_key\n"
+    env_data = "TELEGRAM_BOT_TOKEN=bot123\n"
 
     with (
         tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as yf,
@@ -87,7 +114,8 @@ def test_load_config_integration() -> None:
     try:
         config = load_config(yml_path, env_path)
         assert config.portal_url == "https://test.url"
-        assert config.scoring_thresholds["min_score_to_alert"] == 70
+        assert config.scoring is not None
+        assert config.scoring.min_score_to_alert == 70
         assert config.hitl_approval_required is True
         assert config.euribor_rate == 3.0
         assert config.telegram_bot_token == "bot123"

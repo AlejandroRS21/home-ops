@@ -224,10 +224,8 @@ def subsequent_run(
         try:
             html = _fetch_page_text(fetcher, page_url)
         except RuntimeError as exc:
-            logger.error("Failed to fetch page %d: %s — stopping pagination", page_num, exc)
-            if page_num == 1 and not force:
-                raise
-            break
+            logger.error("Failed to fetch page %d: %s — aborting run", page_num, exc)
+            raise
 
         # Page 1 always updates snapshot
         if page_num == 1:

@@ -378,7 +378,7 @@ class TestSubsequentRun:
         mock_snap: MagicMock,
         mock_get_fetcher: MagicMock,
     ) -> None:
-        """GIVEN page 2 fetch fails WHEN subsequent_run THEN returns page 1 listings."""
+        """GIVEN page 2 fetch fails WHEN subsequent_run THEN raises (no false success)."""
         from home_ops.scraper.lifecycle import subsequent_run
 
         mock_fetch.side_effect = self._fetch_map({BASE_URL: HTML_P1})
@@ -396,9 +396,8 @@ class TestSubsequentRun:
             _PAGE1_MIXED,  # page 1
         ]
 
-        result = subsequent_run(BASE_URL, MagicMock())
-        assert len(result) == 1
-        assert result[0].content_hash == "07e82d979e4fc0bf"
+        with pytest.raises(RuntimeError, match="Network timeout"):
+            subsequent_run(BASE_URL, MagicMock())
 
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._save_snapshot")

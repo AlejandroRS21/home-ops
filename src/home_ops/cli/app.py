@@ -398,11 +398,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
     """Orchestrate one pipeline scan cycle."""
     config = load_config(config_path)
 
-    # Prefer the new typed ScoringThresholds path; fall back to legacy dict
-    if config.scoring is not None:
-        threshold = config.scoring.min_score_to_alert
-    else:
-        threshold = float(config.scoring_thresholds.get("min_score_to_alert", 70.0))
+    threshold = config.scoring.min_score_to_alert if config.scoring is not None else 70.0
     scorer = RulesScorer(config)
 
     db_path = _get_db_path()

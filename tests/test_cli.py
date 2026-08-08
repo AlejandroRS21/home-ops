@@ -15,7 +15,7 @@ from home_ops.cli.app import (
     app,
 )
 from home_ops.models.data_storage import DuckDBConnection
-from home_ops.models.schema import ScheduleConfig
+from home_ops.models.schema import ScheduleConfig, ScoringThresholds
 
 runner = CliRunner()
 
@@ -369,8 +369,7 @@ class TestRunScan:
              patch("home_ops.cli.app.TelegramAlerter") as mock_alerter_cls:
 
             mock_load.return_value.portal_url = "https://test.url"
-            mock_load.return_value.scoring = None
-            mock_load.return_value.scoring_thresholds = {"min_score_to_alert": 50}
+            mock_load.return_value.scoring = ScoringThresholds(min_score_to_alert=50)
             mock_load.return_value.hitl_approval_required = False
             mock_load.return_value.telegram_bot_token = "invalid"
             mock_load.return_value.telegram_chat_id = "invalid"
@@ -663,8 +662,7 @@ class TestRunScanExtra:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 0}
-        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=0)
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
         mock_load_config.return_value.euribor_rate = 3.5
@@ -722,8 +720,7 @@ class TestRunScanExtra:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 0}
-        mock_load_config.return_value.scoring = None
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=0)
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
         mock_load_config.return_value.euribor_rate = 3.5

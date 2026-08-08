@@ -9,4 +9,6 @@ __pycache__/
 .pytest_cache/
 .coverage
 .venv/
+.atl/
+openspec/
 *.md

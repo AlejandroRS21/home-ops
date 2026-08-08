@@ -7,7 +7,6 @@ import pytest
 import yaml
 
 from home_ops.config.loader import load_config, load_env, load_user_profile
-from home_ops.models.schema import ScheduleConfig
 
 
 def test_load_user_profile_valid() -> None:
@@ -169,7 +168,7 @@ class TestAlertScheduleYAML:
             tmp_path.unlink(missing_ok=True)
 
     def test_home_ops_config_env_var_used_when_path_none(self) -> None:
-        """GIVEN HOME_OPS_CONFIG env var set WHEN load_user_profile called with path=None THEN reads from env var."""
+        """GIVEN HOME_OPS_CONFIG set WHEN load_user_profile(None) THEN reads from env var."""
         import os
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
@@ -184,8 +183,41 @@ class TestAlertScheduleYAML:
             del os.environ["HOME_OPS_CONFIG"]
             Path(env_path).unlink(missing_ok=True)
 
+    def test_home_ops_config_fallback_to_config_dir(self) -> None:
+        """GIVEN user_profile.yml absent in cwd THEN falls back to config/user_profile.yml."""
+        import os
+
+        # Ensure cwd user_profile.yml is not present or mocked
+        config_dir = Path.cwd() / "config"
+        config_dir.mkdir(exist_ok=True)
+        fallback_file = config_dir / "user_profile.yml"
+        created_fallback = False
+        if not fallback_file.exists():
+            fallback_file.write_text("portal:\n  idealista_url: 'https://fallback.url'\n")
+            created_fallback = True
+
+        old_env = os.environ.pop("HOME_OPS_CONFIG", None)
+        try:
+            cwd_file = Path.cwd() / "user_profile.yml"
+            renamed_cwd = False
+            if cwd_file.exists():
+                cwd_file.rename(Path.cwd() / "user_profile.yml.tmp_test")
+                renamed_cwd = True
+
+            try:
+                result = load_user_profile(None)
+                assert result["portal"]["idealista_url"] is not None
+            finally:
+                if renamed_cwd:
+                    (Path.cwd() / "user_profile.yml.tmp_test").rename(cwd_file)
+        finally:
+            if old_env is not None:
+                os.environ["HOME_OPS_CONFIG"] = old_env
+            if created_fallback:
+                fallback_file.unlink(missing_ok=True)
+
     def test_home_ops_config_env_var_explicit_path_still_works(self) -> None:
-        """GIVEN HOME_OPS_CONFIG set but explicit path provided WHEN load_user_profile THEN uses explicit path."""
+        """GIVEN HOME_OPS_CONFIG set and explicit path THEN uses explicit path."""
         import os
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:

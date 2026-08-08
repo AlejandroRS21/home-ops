@@ -18,7 +18,17 @@ def load_user_profile(path: Path | None = None) -> dict[str, Any]:
     """
     if path is None:
         env_path = os.environ.get("HOME_OPS_CONFIG")
-        path = Path(env_path) if env_path else Path.cwd() / "user_profile.yml"
+        if env_path:
+            path = Path(env_path)
+        else:
+            default_cwd = Path.cwd() / "user_profile.yml"
+            default_config_dir = Path.cwd() / "config" / "user_profile.yml"
+            if default_cwd.exists():
+                path = default_cwd
+            elif default_config_dir.exists():
+                path = default_config_dir
+            else:
+                path = default_cwd
 
     if not path.exists():
         raise FileNotFoundError(

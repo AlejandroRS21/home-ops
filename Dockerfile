@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
 COPY src /app/src
 COPY config /app/config
 COPY pyproject.toml /app/
+RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .
 
 # Run as a non-root user. uid 10001 is the conventional "scratch" service UID.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin homeops \

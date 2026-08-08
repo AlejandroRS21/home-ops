@@ -79,6 +79,11 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
     secrets = load_env(env_path)
 
     scoring_raw = raw.get("scoring", {}).get("thresholds", {})
+    legacy_raw = raw.get("scoring_thresholds", {})
+    if not scoring_raw and legacy_raw:
+        # Backward-compat: legacy "scoring_thresholds" block maps to the typed
+        # ScoringThresholds model so there is a single threshold source.
+        scoring_raw = {"min_score_to_alert": legacy_raw.get("min_score_to_alert", 70.0)}
     scoring = ScoringThresholds(**scoring_raw) if scoring_raw else None
 
     # Parse alert_schedule section with backward-compat for old 'time' key

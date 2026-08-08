@@ -114,7 +114,8 @@ def test_load_config_integration() -> None:
     try:
         config = load_config(yml_path, env_path)
         assert config.portal_url == "https://test.url"
-        assert config.scoring_thresholds["min_score_to_alert"] == 70
+        assert config.scoring is not None
+        assert config.scoring.min_score_to_alert == 70
         assert config.hitl_approval_required is True
         assert config.euribor_rate == 3.0
         assert config.telegram_bot_token == "bot123"

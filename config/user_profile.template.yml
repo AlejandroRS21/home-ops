@@ -5,13 +5,10 @@
 portal:
   idealista_url: "https://www.idealista.com/..."  # Replace with your Idealista search URL
 
-# Scoring thresholds (0-100)
-scoring_thresholds:
-  min_score_to_alert: 70
-
 # Multi-dimensional scoring engine configuration
 scoring:
   thresholds:
+    min_score_to_alert: 70
     price_median: 250000
     price_over_median_penalty: 0.30
     price_under_median_bonus: 0.20

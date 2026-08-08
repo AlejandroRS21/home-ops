@@ -8,7 +8,6 @@ portal:
 # Scoring thresholds (0-100)
 scoring_thresholds:
   min_score_to_alert: 70
-  min_score_to_contact: 85
 
 # Multi-dimensional scoring engine configuration
 scoring:

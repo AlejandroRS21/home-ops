@@ -55,7 +55,7 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         values = {}
         warnings.warn(
             f".env file not found at {env_path}. "
-            "Secrets (Telegram, Gemini, Apify tokens) will be missing. "
+            "Telegram credentials will be missing. "
             "Copy .env.example to .env and fill in your credentials.",
             stacklevel=2,
         )
@@ -67,10 +67,6 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         or values.get("TELEGRAM_CHAT_ID")
         or os.environ.get("CHAT_ID", "")
         or os.environ.get("TELEGRAM_CHAT_ID", ""),
-        "GEMINI_API_KEY": values.get("GEMINI_API_KEY")
-        or os.environ.get("GEMINI_API_KEY", ""),
-        "APIFY_API_TOKEN": values.get("APIFY_API_TOKEN")
-        or os.environ.get("APIFY_API_TOKEN", ""),
     }
 
 

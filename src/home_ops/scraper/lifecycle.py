@@ -149,8 +149,8 @@ def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
         try:
             html = _fetch_page_text(fetcher, page_url)
         except RuntimeError as exc:
-            logger.warning("Page %d fetch failed: %s — stopping pagination", page_num, exc)
-            break
+            logger.error("Page %d fetch failed: %s — stopping pagination", page_num, exc)
+            raise
 
         raw_dicts = parse_listings(html)
         logger.info("Page %d: found %d listings", page_num, len(raw_dicts))
@@ -224,7 +224,9 @@ def subsequent_run(
         try:
             html = _fetch_page_text(fetcher, page_url)
         except RuntimeError as exc:
-            logger.warning("Failed to fetch page %d: %s — stopping pagination", page_num, exc)
+            logger.error("Failed to fetch page %d: %s — stopping pagination", page_num, exc)
+            if page_num == 1 and not force:
+                raise
             break
 
         # Page 1 always updates snapshot

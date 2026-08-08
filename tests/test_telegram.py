@@ -31,11 +31,18 @@ class TestTelegramAlerter:
         assert alerter.score_threshold == 85.0
 
     def test_send_alert_without_credentials(self) -> None:
-        """GIVEN no credentials WHEN send_alert THEN returns True (no-op)."""
+        """GIVEN no credentials WHEN send_alert THEN returns False and logs error."""
         alerter = TelegramAlerter(bot_token="", chat_id="", score_threshold=50.0)
         listing = Listing(content_hash="abc", url="https://test.com")
         result = alerter.send_alert(listing, score=80.0)
-        assert result is True
+        assert result is False
+
+    def test_send_alert_missing_chat_id(self) -> None:
+        """GIVEN missing chat_id WHEN send_alert THEN returns False."""
+        alerter = TelegramAlerter(bot_token="123:xyz", chat_id="", score_threshold=50.0)
+        listing = Listing(content_hash="abc", url="https://test.com")
+        result = alerter.send_alert(listing, score=80.0)
+        assert result is False
 
     def test_format_listing_message(self) -> None:
         """GIVEN listing and score WHEN _format_listing_message THEN formatted string."""
@@ -69,8 +76,8 @@ class TestTelegramAlerter:
         assert "⚠️" in message
 
     def test_send_alert_with_flags(self) -> None:
-        """GIVEN flags WHEN send_alert THEN no crash."""
+        """GIVEN flags WHEN send_alert THEN returns False when credentials missing."""
         alerter = TelegramAlerter(bot_token="", chat_id="", score_threshold=50.0)
         listing = Listing(content_hash="ghi", url="https://test.com/flags")
         result = alerter.send_alert(listing, score=75.0, flags=["certificado_missing"])
-        assert result is True
+        assert result is False

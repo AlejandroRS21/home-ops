@@ -153,6 +153,7 @@ class TestCLICommands:
         result = runner.invoke(app, ["scan"])
         assert result.exit_code == 0
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.scraper.lifecycle.cold_start")
@@ -163,6 +164,7 @@ class TestCLICommands:
         mock_cold_start: MagicMock,
         mock_get_conn: MagicMock,
         mock_load_config: MagicMock,
+        mock_subsequent: MagicMock,
     ) -> None:
         """GIVEN HITL enabled and listing not approved WHEN scan THEN alert not sent."""
         from home_ops.models.schema import Listing
@@ -183,7 +185,7 @@ class TestCLICommands:
             address="Calle HITL 1",
         )
         db.insert_listing(listing)
-        mock_cold_start.return_value = [listing]
+        mock_subsequent.return_value = [listing]
         mock_send_alert.return_value = True
 
         result = runner.invoke(app, ["scan"])
@@ -191,6 +193,7 @@ class TestCLICommands:
         # Alert should NOT be sent because listing is pending approval
         mock_send_alert.assert_not_called()
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.scraper.lifecycle.cold_start")
@@ -201,6 +204,7 @@ class TestCLICommands:
         mock_cold_start: MagicMock,
         mock_get_conn: MagicMock,
         mock_load_config: MagicMock,
+        mock_subsequent: MagicMock,
     ) -> None:
         """GIVEN scan with new listings WHEN run THEN processes them."""
         from home_ops.models.data_storage import DuckDBConnection
@@ -227,7 +231,7 @@ class TestCLICommands:
 
         # Insert to get the id, then mock cold_start to return it
         db.insert_listing(listing)
-        mock_cold_start.return_value = [listing]
+        mock_subsequent.return_value = [listing]
         mock_send_alert.return_value = True
 
         result = runner.invoke(app, ["scan"])
@@ -322,8 +326,9 @@ class TestRunScan:
         mock_subsequent_run: MagicMock,
         mock_get_conn: MagicMock,
     ) -> None:
-        """GIVEN cold_start raises WHEN _run_scan THEN handles gracefully."""
+        """GIVEN cold_start raises WHEN _run_scan THEN exception re-raised."""
         mock_db = MagicMock()
+        mock_db.conn.execute.return_value.fetchone.return_value = (0,)
         mock_get_conn.return_value.__enter__.return_value = mock_db
         mock_cold_start.side_effect = RuntimeError("Network error")
 
@@ -333,9 +338,62 @@ class TestRunScan:
             mock_load.return_value.hitl_approval_required = False
             mock_load.return_value.telegram_chat_id = ""
 
-            # Should not raise — the function logs and continues
+            with pytest.raises(RuntimeError, match="Network error"):
+                _run_scan()
+
+    @patch("home_ops.cli.app.get_connection")
+    def test_run_scan_alert_failure_writes_failed_status(
+        self,
+        mock_get_conn: MagicMock,
+    ) -> None:
+        """GIVEN send_alert fails WHEN _run_scan runs THEN daily_alert_log gets status='failed' and quota is 0."""
+        from home_ops.models.data_storage import DuckDBConnection
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+
+        listing = Listing(
+            content_hash="hash_alert_fail",
+            url="https://test.com/alert-fail",
+            address="Calle Alert Fail 1",
+            price=Decimal("200000.00"),
+            m2=80.0,
+            floor="2",
+        )
+
+        with patch("home_ops.cli.app.load_config") as mock_load, \
+             patch("home_ops.scraper.lifecycle.cold_start") as mock_cold, \
+             patch("home_ops.cli.app.TelegramAlerter") as mock_alerter_cls:
+
+            mock_load.return_value.portal_url = "https://test.url"
+            mock_load.return_value.scoring = None
+            mock_load.return_value.scoring_thresholds = {"min_score_to_alert": 50}
+            mock_load.return_value.hitl_approval_required = False
+            mock_load.return_value.telegram_bot_token = "invalid"
+            mock_load.return_value.telegram_chat_id = "invalid"
+            mock_load.return_value.alert_schedule.max_alerts_per_day = 5
+            mock_load.return_value.euribor_rate = 3.5
+
+            mock_cold.return_value = [listing]
+
+            mock_alerter_inst = MagicMock()
+            mock_alerter_inst.send_alert.return_value = False
+            mock_alerter_cls.return_value = mock_alerter_inst
+
             _run_scan()
-            mock_db.init_db.assert_called_once()
+
+            # Check DB: status should be 'failed'
+            rows = db.conn.execute("SELECT listing_hash, status FROM daily_alert_log").fetchall()
+            assert len(rows) == 1
+            assert rows[0][0] == "hash_alert_fail"
+            assert rows[0][1] == "failed"
+
+            # Check daily sent count remains 0
+            from home_ops.cli.app import _get_daily_alert_count
+            assert _get_daily_alert_count(db.conn) == 0
 
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.scraper.lifecycle.subsequent_run")
@@ -584,6 +642,7 @@ class TestGetDailyAlertCount:
 class TestRunScanExtra:
     """Additional tests for _run_scan edge cases."""
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.scraper.lifecycle.cold_start")
@@ -594,6 +653,7 @@ class TestRunScanExtra:
         mock_cold_start: MagicMock,
         mock_load_config: MagicMock,
         mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
     ) -> None:
         """GIVEN queued alert from yesterday WHEN scan runs THEN re-attempted."""
         from home_ops.models.schema import Listing
@@ -628,7 +688,7 @@ class TestRunScanExtra:
             ["queued_yesterday", yesterday],
         )
 
-        mock_cold_start.return_value = []  # no new listings
+        mock_subsequent.return_value = []  # no new listings
 
         _run_scan()
 
@@ -641,6 +701,7 @@ class TestRunScanExtra:
         assert row[0] == "sent"
         mock_send_alert.assert_called_once()
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.scraper.lifecycle.cold_start")
@@ -651,6 +712,7 @@ class TestRunScanExtra:
         mock_cold_start: MagicMock,
         mock_load_config: MagicMock,
         mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
     ) -> None:
         """GIVEN queued alerts and daily quota full WHEN scan runs THEN does not exceed quota."""
         from home_ops.models.schema import Listing
@@ -688,7 +750,7 @@ class TestRunScanExtra:
                 [f"queued_{i}", yesterday],
             )
 
-        mock_cold_start.return_value = []
+        mock_subsequent.return_value = []
 
         _run_scan()
 
@@ -701,6 +763,7 @@ class TestRunScanExtra:
         ).fetchone()[0]
         assert sent == 1
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.scraper.lifecycle.cold_start")
@@ -711,6 +774,7 @@ class TestRunScanExtra:
         mock_cold_start: MagicMock,
         mock_load_config: MagicMock,
         mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
     ) -> None:
         """GIVEN queued alert from TODAY WHEN scan runs THEN not re-attempted (queued this cycle)."""
         from home_ops.models.schema import Listing
@@ -742,7 +806,7 @@ class TestRunScanExtra:
             ["queued_today", now],
         )
 
-        mock_cold_start.return_value = []
+        mock_subsequent.return_value = []
 
         _run_scan()
 

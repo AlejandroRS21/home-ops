@@ -415,23 +415,23 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
         has_data = row is not None and row[0] is not None and row[0] != 0
 
         if has_data:
-            from home_ops.scraper.lifecycle import subsequent_run
-
             try:
+                from home_ops.scraper.lifecycle import subsequent_run
+
                 listings: list[Listing] = subsequent_run(
                     config.portal_url, db, max_pages=5, force=force
                 )
             except Exception as exc:
-                console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
-                listings = []
+                console.print(f"[yellow]Scraper failed: {exc}[/yellow]")
+                raise
         else:
-            from home_ops.scraper.lifecycle import cold_start
-
             try:
+                from home_ops.scraper.lifecycle import cold_start
+
                 listings = cold_start(config.portal_url)
             except Exception as exc:
-                console.print(f"[yellow]Scraper returned no data: {exc}[/yellow]")
-                listings = []
+                console.print(f"[yellow]Scraper failed: {exc}[/yellow]")
+                raise
 
         # 2. Process new listings (if any)
         if listings:
@@ -513,15 +513,22 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                     )
                     continue
 
-                alerter.send_alert(listing, score, flags)
+                success = alerter.send_alert(listing, score, flags)
+                status = "sent" if success else "failed"
                 db.conn.execute(
-                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
-                    [listing.content_hash],
+                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, ?)",
+                    [listing.content_hash, status],
                 )
-                console.print(
-                    f"  [green]Alert sent:[/green] {listing.address or listing.url} "
-                    f"(score {score:.1f})"
-                )
+                if success:
+                    console.print(
+                        f"  [green]Alert sent:[/green] {listing.address or listing.url} "
+                        f"(score {score:.1f})"
+                    )
+                else:
+                    console.print(
+                        f"  [red]Alert failed:[/red] {listing.address or listing.url} "
+                        f"(score {score:.1f})"
+                    )
 
         # 3. Process approved-but-not-alerted listings from previous scans (always runs)
         alerter = TelegramAlerter(
@@ -575,19 +582,26 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 )
                 continue
 
-            alerter.send_alert(listing, score, flags)
-            console.print(
-                f"  [green]Alert sent (approved):[/green] {listing.address or listing.url} "
-                f"(score {score:.1f})"
-            )
+            success = alerter.send_alert(listing, score, flags)
             db.conn.execute(
                 "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
                 [listing_id],
             )
+            status = "sent" if success else "failed"
             db.conn.execute(
-                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, 'sent')",
-                [listing.content_hash],
+                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, ?)",
+                [listing.content_hash, status],
             )
+            if success:
+                console.print(
+                    f"  [green]Alert sent (approved):[/green] {listing.address or listing.url} "
+                    f"(score {score:.1f})"
+                )
+            else:
+                console.print(
+                    f"  [red]Alert failed (approved):[/red] {listing.address or listing.url} "
+                    f"(score {score:.1f})"
+                )
 
         # 4. Re-attempt queued alerts from previous days (always runs)
         today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -637,15 +651,22 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 )
                 continue
 
-            alerter.send_alert(listing, score_value, score_result.flags)
+            success = alerter.send_alert(listing, score_value, score_result.flags)
+            status = 'sent' if success else 'failed'
             db.conn.execute(
-                "UPDATE daily_alert_log SET status = 'sent', sent_at = ? WHERE id = ?",
-                [datetime.now(UTC), queued_id],
+                "UPDATE daily_alert_log SET status = ?, sent_at = ? WHERE id = ?",
+                [status, datetime.now(UTC), queued_id],
             )
-            console.print(
-                f"  [green]Alert sent (queued re-attempt):[/green] "
-                f"{listing.address or listing.url} (score {score_value:.1f})"
-            )
+            if success:
+                console.print(
+                    f"  [green]Alert sent (queued re-attempt):[/green] "
+                    f"{listing.address or listing.url} (score {score_value:.1f})"
+                )
+            else:
+                console.print(
+                    f"  [red]Alert failed (queued re-attempt):[/red] "
+                    f"{listing.address or listing.url} (score {score_value:.1f})"
+                )
 
     console.print("[bold green]Pipeline scan complete.[/bold green]")
 

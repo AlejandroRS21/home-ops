@@ -55,7 +55,7 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         values = {}
         warnings.warn(
             f".env file not found at {env_path}. "
-            "Secrets (Telegram, Gemini, Apify tokens) will be missing. "
+            "Telegram credentials will be missing. "
             "Copy .env.example to .env and fill in your credentials.",
             stacklevel=2,
         )
@@ -67,10 +67,6 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         or values.get("TELEGRAM_CHAT_ID")
         or os.environ.get("CHAT_ID", "")
         or os.environ.get("TELEGRAM_CHAT_ID", ""),
-        "GEMINI_API_KEY": values.get("GEMINI_API_KEY")
-        or os.environ.get("GEMINI_API_KEY", ""),
-        "APIFY_API_TOKEN": values.get("APIFY_API_TOKEN")
-        or os.environ.get("APIFY_API_TOKEN", ""),
     }
 
 
@@ -83,6 +79,11 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
     secrets = load_env(env_path)
 
     scoring_raw = raw.get("scoring", {}).get("thresholds", {})
+    legacy_raw = raw.get("scoring_thresholds", {})
+    if not scoring_raw and legacy_raw:
+        # Backward-compat: legacy "scoring_thresholds" block maps to the typed
+        # ScoringThresholds model so there is a single threshold source.
+        scoring_raw = {"min_score_to_alert": legacy_raw.get("min_score_to_alert", 70.0)}
     scoring = ScoringThresholds(**scoring_raw) if scoring_raw else None
 
     # Parse alert_schedule section with backward-compat for old 'time' key

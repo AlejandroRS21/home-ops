@@ -5,7 +5,7 @@
 <!-- TODO: Insert screenshot of a Telegram alert with score -->
 <!-- Example: ![Telegram alert showing listing score 85/100](./docs/screenshot-alert.png) -->
 
-**184 tests — passing.** [MIT license](./LICENSE).
+**187 tests — passing.** [MIT license](./LICENSE).
 
 ---
 
@@ -47,7 +47,7 @@ The daemon runs on a schedule (daily at 09:00 Europe/Madrid by default), respect
 
 | File | Purpose |
 |------|---------|
-| `.env` | Secrets: Telegram bot token, chat ID, Gemini API key |
+| `.env` | Secrets: Telegram bot token, chat ID |
 | `user_profile.yml` | Idealista search URL, scoring thresholds & weights, alert schedule, Euribor rate |
 
 Config lives outside the container — edit `config/user_profile.yml` and restart with `docker compose restart`.
@@ -76,14 +76,14 @@ homeops status     — show pipeline state, last run, pending approvals
 | Storage | DuckDB | Embedded, zero-config, persists across restarts |
 | CLI | Typer + Rich | Typed, self-documenting commands |
 | Config | YAML + .env | Human-readable, version-controlled |
-| CI | pytest + ruff + mypy | 184 tests, strict typing |
+| CI | pytest + ruff + mypy | 187 tests, strict typing |
 
 ---
 
 ## Tests
 
 ```bash
-pytest                          # 184 tests, coverage report
+pytest                          # 187 tests, coverage report
 pytest tests/test_scorer/       # scoring engine only
 pytest tests/test_cli.py        # CLI commands
 ```

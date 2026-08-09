@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir uv
 # directory. This gives a pinned, reproducible dependency set without ever
 # needing the full source tree at build time.
 COPY pyproject.toml uv.lock ./
-RUN uv export --no-hashes --no-dev -o /tmp/requirements.txt \
+RUN uv export --no-hashes --no-dev --no-emit-project -o /tmp/requirements.txt \
     && pip wheel --no-cache-dir --wheel-dir /wheels -r /tmp/requirements.txt
 
 
@@ -36,7 +36,9 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
 COPY src /app/src
 COPY config /app/config
 COPY pyproject.toml /app/
-RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .
+# Isolated PEP 517 build so the hatchling backend is installed in a throwaway
+# build env, keeping the runtime image free of build tooling.
+RUN pip install --no-cache-dir --no-deps -e .
 
 # Run as a non-root user. uid 10001 is the conventional "scratch" service UID.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin homeops \

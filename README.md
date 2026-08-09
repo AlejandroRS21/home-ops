@@ -1,100 +1,173 @@
 # Home-Ops
 
-> Agentic pipeline that scrapes Idealista, scores every listing across 5 configurable dimensions, and alerts you on Telegram before anyone else sees it.
+Real estate agentic pipeline: scrape Idealista, score every listing across 5 dimensions, alert via Telegram.
 
-<!-- TODO: Insert screenshot of a Telegram alert with score -->
-<!-- Example: ![Telegram alert showing listing score 85/100](./docs/screenshot-alert.png) -->
+[![CI](https://img.shields.io/github/actions/workflow/status/AlejandroRS21/home-ops/ci.yml?branch=main&label=CI)](https://github.com/AlejandroRS21/home-ops/actions)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://github.com/AlejandroRS21/home-ops)
+[![License: MIT](https://img.shields.io/github/license/AlejandroRS21/home-ops)](https://github.com/AlejandroRS21/home-ops/blob/main/LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/AlejandroRS21/home-ops)](https://github.com/AlejandroRS21/home-ops)
 
-**Full test suite passing.** [MIT license](./LICENSE).
+## Why
 
----
+Finding a flat in Spain is a race. By the time a listing appears on Idealista and you open the app, the good ones are already gone. Home-Ops checks your Idealista search every morning at 09:00 (Europe/Madrid), scores each new listing against your personal criteria, and pushes the best matches to your phone before you finish breakfast.
+
+No dashboards to check. No daily "I should look at Idealista" mental load. Just a Telegram ping when something worth seeing appears.
+
+## Features
+
+- **5-dimension weighted scoring** — every listing is scored against your own priorities: price, size, energy certificate, garage, and Euribor-based affordability. Weights are yours to configure.
+- **Content-hash deduplication** — identical listings are detected by content hash, so only genuinely new inventory triggers an alert.
+- **Human-in-the-loop approval gate** — optional manual approval before any alert is sent, so nothing reaches your phone without your sign-off.
+- **Scheduled daemon** — runs on a daily or interval schedule with a per-day alert quota, catch-up recovery after downtime, and overlap protection.
+- **DuckDB storage** — embedded, zero-config database that persists across restarts.
+- **Docker and systemd deployment** — run it with `docker compose up` or as a hardened systemd service.
+
+Scoring dimensions and default weights:
+
+| Dimension | Weight |
+|-----------|--------|
+| price | 0.35 |
+| size | 0.25 |
+| energy_cert | 0.15 |
+| garage | 0.10 |
+| affordability | 0.15 |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Portal[Idealista] --> LS[scraper/lifecycle.py]
+    LS --> P[scraper/parse.py]
+    P --> D[scraper/dedup.py]
+    D --> R[scorer/rules.py]
+    R --> H{cli/app.py approve<br/>HITL gate}
+    H -- approved --> T[alerter/telegram.py]
+    LS --> DB[(models/data_storage.py<br/>DuckDB)]
+    D --> DB
+    R --> DB
+    H --> DB
+```
+
+The pipeline scrapes Idealista, parses and deduplicates listings, scores each one with the rules engine, gates alerts behind manual approval when enabled, and notifies you via Telegram. DuckDB records every stage.
 
 ## Quick start
+
+### Option A: Docker (recommended)
 
 ```bash
 git clone https://github.com/AlejandroRS21/home-ops
 cd home-ops
-cp .env.example .env                              # add secrets
-cp config/user_profile.template.yml config/user_profile.yml  # edit your search URL & scoring
+cp .env.example .env                              # add your Telegram secrets
+cp config/user_profile.template.yml config/user_profile.yml  # set your search URL and scoring
 docker compose up
 ```
 
-That's it. The daemon scrapes, scores, and alerts on your schedule. No cloud dependencies, no external services.
+The daemon starts, scrapes on your schedule, and alerts to Telegram. No cloud dependencies, no external services.
 
----
+### Option B: Local development
 
-## How it works
-
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp config/user_profile.template.yml config/user_profile.yml
+homeops scan       # run one full pipeline cycle now
+homeops status     # inspect pipeline state
 ```
-Idealista ──> Scrapling ──> 5-dimension scorer ──> Telegram alert
-                 │                    │
-                 │                    ├── price (weight 0.35)
-                 │                    ├── size (weight 0.25)
-                 │                    ├── energy certificate (weight 0.15)
-                 │                    ├── garage (weight 0.10)
-                 │                    └── Euribor affordability (weight 0.15)
-                 │
-                 └── Dedup by content hash → only new listings trigger alerts
-```
-
-Every dimension is configurable via `user_profile.yml` — thresholds, weights, expected garage price, Euribor rate, and more.
-
-The daemon runs on a schedule (daily at 09:00 Europe/Madrid by default), respects a daily alert quota, recovers from stale/crashed runs, and supports human-in-the-loop approval before alerts are sent.
-
----
 
 ## Configuration
 
-| File | Purpose |
-|------|---------|
-| `.env` | Secrets: Telegram bot token, chat ID |
-| `user_profile.yml` | Idealista search URL, scoring thresholds & weights, alert schedule, Euribor rate |
+Configuration is split across two files: `.env` holds secrets, `user_profile.yml` holds your preferences. An optional `HOME_OPS_CONFIG` environment variable overrides the profile path.
 
-Config lives outside the container — edit `config/user_profile.yml` and restart with `docker compose restart`.
+### .env (secrets)
 
----
+| Variable | Purpose |
+|----------|---------|
+| `TELEGRAM_BOT_TOKEN` | Required. Bot token, create one via [@BotFather](https://t.me/BotFather). |
+| `TELEGRAM_CHAT_ID` | Required. Chat ID for alerts; the legacy `CHAT_ID` name is also accepted. |
+| `HOME_OPS_CONFIG` | Optional. Absolute path to an alternative `user_profile.yml`. |
 
-## CLI
+### user_profile.yml (preferences)
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `portal.idealista_url` | — | Your Idealista search URL. |
+| `scoring.thresholds.min_score_to_alert` | `70` | Minimum score before a listing is considered for alerting. |
+| `scoring.thresholds.weights` | see table above | Per-dimension scoring weights. |
+| `hitl_approval_required` | `true` | Require manual approval before alerts are sent. |
+| `alert_schedule.daily_time` | `"09:00"` | Daily alert time (HH:MM). |
+| `alert_schedule.timezone` | `"Europe/Madrid"` | Timezone for the schedule. |
+| `alert_schedule.max_alerts_per_day` | `5` | Daily alert quota. |
+| `euribor_rate` | `3.5` | Euribor rate used by the affordability dimension. |
+
+Config lives outside the container — edit `config/user_profile.yml` and run `docker compose restart`.
+
+## CLI reference
+
+| Command | Behavior |
+|---------|----------|
+| `scan [CONFIG_PATH] [-f/--force]` | Run the full pipeline: scrape, deduplicate, score, alert. Cold-start and incremental modes are auto-detected; `--force` bypasses early-stop pagination. |
+| `status [CONFIG_PATH]` | Rich summary: total listings, last scan time, pending HITL approvals. |
+| `snapshots-reset` | Invalidate cached scraper snapshots; the next scan performs a full cold start. |
+| `approve <listing_id> [-c PATH]` | HITL gate: mark a listing as approved; alerts are sent on the next scan. |
+| `daemon [-c PATH] [--dry-run]` | Schedule loop (60s tick) in daily or interval mode, with catch-up recovery, overlap guard, and daily alert quota. |
+
+## Project layout
 
 ```
-homeops scan       — run one scrape → score → alert cycle now
-homeops approve    — approve pending listings for alerting (HITL mode)
-homeops daemon     — persistent daemon loop with schedule
-homeops status     — show pipeline state, last run, pending approvals
+home-ops/
+├── src/home_ops/
+│   ├── cli/        # Typer CLI: scan, status, snapshots-reset, approve, daemon
+│   ├── config/     # YAML + .env configuration loader
+│   ├── models/     # Pydantic schemas and DuckDB storage
+│   ├── scraper/    # lifecycle, parse, dedup
+│   ├── scorer/     # rules engine and affordability model
+│   └── alerter/    # Telegram notifier
+├── config/         # user_profile.template.yml
+├── systemd/        # homeops.service unit
+├── tests/          # pytest suite (unit + CLI)
+├── docker-compose.yml
+├── Dockerfile
+└── pyproject.toml
 ```
 
----
+## Quality gates
 
-## Stack
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Language | Python 3.12 | — |
-| Scraper | Scrapling + curl_cffi | Undetectable TLS fingerprinting, adaptive parser |
-| Scoring | Custom engine | 5 configurable dimensions, Euribor-aware |
-| Alerter | python-telegram-bot | Direct peer-to-peer, no server needed |
-| Storage | DuckDB | Embedded, zero-config, persists across restarts |
-| CLI | Typer + Rich | Typed, self-documenting commands |
-| Config | YAML + .env | Human-readable, version-controlled |
-| CI | pytest + ruff + mypy | full suite, strict typing |
-
----
-
-## Tests
+Every push to `main` runs in CI (GitHub Actions):
 
 ```bash
-pytest                          # full suite, coverage report
-pytest tests/test_scorer/       # scoring engine only
-pytest tests/test_cli.py        # CLI commands
+ruff check src/                    # lint
+mypy src/                          # strict type checking
+pytest                            # full test suite (coverage floor 70%)
+docker compose up --build         # docker smoke: image builds and runs
 ```
 
-Tests run in CI on every push via GitHub Actions (pytest + ruff + mypy).
+The full test suite passes on every CI run, with a 70% coverage floor enforced by the coverage gate.
 
----
+## Deployment
+
+### Docker
+
+`docker compose` is the recommended deployment: `.env` is loaded via `env_file`, your profile is mounted read-only from `./config` into the container (`HOME_OPS_CONFIG=/app/config/user_profile.yml`), and the DuckDB database persists in the `homeops-data` volume.
+
+```bash
+docker compose up -d
+docker compose logs -f homeops
+```
+
+### systemd
+
+A hardened unit is provided in [`systemd/homeops.service`](systemd/homeops.service): runs as a dedicated non-root `homeops` user with `ProtectSystem=strict`, `PrivateTmp`, and a locked-down capability set.
+
+```bash
+sudo useradd --system --home /opt/home-ops --shell /usr/sbin/nologin homeops
+sudo chown -R homeops:homeops /opt/home-ops/data
+sudo cp systemd/homeops.service /etc/systemd/system/
+sudo systemctl enable --now homeops
+```
 
 ## Roadmap
 
-- [x] MVP: scrape → score → alert on Telegram
+- [x] MVP: scrape, score, alert on Telegram
 - [x] Daemon scheduler with catch-up recovery and daily quota
 - [x] Human-in-the-loop approval gate
 - [x] Docker deployment
@@ -103,14 +176,6 @@ Tests run in CI on every push via GitHub Actions (pytest + ruff + mypy).
 - [ ] Textual TUI for real-time pipeline monitoring
 - [ ] Multi-portal support (Fotocasa, Habitaclia)
 
----
+## License
 
-## Why
-
-Finding a flat in Spain is a race. By the time you open Idealista, the listing is hours old and the good ones are gone. This pipeline checks Idealista every morning at 09:00, scores every new listing against your personal criteria, and pushes the best matches to your phone before you finish breakfast.
-
-No dashboards to check. No daily "I should look at Idealista" mental load. Just a Telegram ping when something worth seeing appears.
-
----
-
-Project template: [openspec](https://github.com/gentleman-programming/openspec)
+[MIT](LICENSE)

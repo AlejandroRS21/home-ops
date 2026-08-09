@@ -145,7 +145,6 @@ class TestCLICommands:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = True
         mock_load_config.return_value.telegram_chat_id = ""
         mock_cold_start.return_value = []
@@ -174,7 +173,6 @@ class TestCLICommands:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = True
         mock_load_config.return_value.telegram_chat_id = ""
 
@@ -215,7 +213,6 @@ class TestCLICommands:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
 
@@ -308,7 +305,6 @@ class TestRunScan:
 
         with patch("home_ops.cli.app.load_config") as mock_load:
             mock_load.return_value.portal_url = "https://test.url"
-            mock_load.return_value.scoring_thresholds = {"min_score_to_alert": 70}
             mock_load.return_value.hitl_approval_required = False
             mock_load.return_value.telegram_chat_id = ""
 
@@ -334,7 +330,6 @@ class TestRunScan:
 
         with patch("home_ops.cli.app.load_config") as mock_load:
             mock_load.return_value.portal_url = "https://test.url"
-            mock_load.return_value.scoring_thresholds = {"min_score_to_alert": 70}
             mock_load.return_value.hitl_approval_required = False
             mock_load.return_value.telegram_chat_id = ""
 
@@ -419,7 +414,6 @@ class TestRunScan:
 
         with patch("home_ops.cli.app.load_config") as mock_load:
             mock_load.return_value.portal_url = "https://test.url"
-            mock_load.return_value.scoring_thresholds = {"min_score_to_alert": 70}
             mock_load.return_value.hitl_approval_required = False
             mock_load.return_value.telegram_chat_id = ""
 
@@ -442,7 +436,6 @@ class TestRunScan:
 
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
 
@@ -469,7 +462,6 @@ class TestRunScan:
 
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
 
@@ -498,7 +490,6 @@ class TestRunScan:
 
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
 
@@ -781,7 +772,6 @@ class TestRunScanExtra:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.scoring = None
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""
@@ -831,7 +821,6 @@ class TestRunScanExtra:
         db.init_db()
         mock_get_conn.return_value.__enter__.return_value = db
         mock_load_config.return_value.portal_url = "https://test.url"
-        mock_load_config.return_value.scoring_thresholds = {"min_score_to_alert": 70}
         mock_load_config.return_value.scoring = None
         mock_load_config.return_value.hitl_approval_required = False
         mock_load_config.return_value.telegram_chat_id = ""

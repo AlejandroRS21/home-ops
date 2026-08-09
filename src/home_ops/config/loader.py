@@ -94,7 +94,6 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
 
     return Config(
         portal_url=raw.get("portal", {}).get("idealista_url", ""),
-        scoring_thresholds=raw.get("scoring_thresholds", {}),
         scoring=scoring,
         alert_schedule=schedule_config,
         hitl_approval_required=raw.get("hitl_approval_required", True),

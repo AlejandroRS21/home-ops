@@ -1,14 +1,34 @@
 [Unit]
 Description=Home-Ops Automated Pipeline
-After=network.target
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+# Create the static system user once:
+#   sudo useradd --system --home /opt/home-ops --shell /usr/sbin/nologin homeops
+# Then grant write access to the data directory:
+#   sudo chown -R homeops:homeops /opt/home-ops/data
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
+User=homeops
+Group=homeops
 ExecStart=/usr/local/bin/homeops daemon
 WorkingDirectory=/opt/home-ops
+Environment=HOME_OPS_CONFIG=/opt/home-ops/user_profile.yml
 Restart=on-failure
 RestartSec=30
-Environment=HOME_OPS_CONFIG=/opt/home-ops/user_profile.yml
+ProtectSystem=strict
+ReadWritePaths=/opt/home-ops/data
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+LockPersonality=yes
 
 [Install]
 WantedBy=multi-user.target

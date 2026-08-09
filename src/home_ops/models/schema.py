@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Literal
 from zoneinfo import available_timezones
 
 from pydantic import BaseModel, Field, field_validator
@@ -108,7 +108,6 @@ class Config(BaseModel):
     """Merged application configuration from YAML + .env."""
 
     portal_url: str = ""
-    scoring_thresholds: dict[str, Any] = Field(default_factory=lambda: {"min_score_to_alert": 70.0})
     hitl_approval_required: bool = True
     euribor_rate: float = 3.5
     telegram_bot_token: str = ""

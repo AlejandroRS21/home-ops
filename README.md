@@ -5,7 +5,7 @@
 <!-- TODO: Insert screenshot of a Telegram alert with score -->
 <!-- Example: ![Telegram alert showing listing score 85/100](./docs/screenshot-alert.png) -->
 
-**187 tests — passing.** [MIT license](./LICENSE).
+**Full test suite passing.** [MIT license](./LICENSE).
 
 ---
 
@@ -76,14 +76,14 @@ homeops status     — show pipeline state, last run, pending approvals
 | Storage | DuckDB | Embedded, zero-config, persists across restarts |
 | CLI | Typer + Rich | Typed, self-documenting commands |
 | Config | YAML + .env | Human-readable, version-controlled |
-| CI | pytest + ruff + mypy | 187 tests, strict typing |
+| CI | pytest + ruff + mypy | full suite, strict typing |
 
 ---
 
 ## Tests
 
 ```bash
-pytest                          # 187 tests, coverage report
+pytest                          # full suite, coverage report
 pytest tests/test_scorer/       # scoring engine only
 pytest tests/test_cli.py        # CLI commands
 ```

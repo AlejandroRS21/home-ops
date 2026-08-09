@@ -34,7 +34,7 @@ garage:
 
 # Alert schedule
 alert_schedule:
-  time: "09:00"  # Daily alert time (HH:MM format)
+  daily_time: "09:00"  # Daily alert time (HH:MM format)
   timezone: "Europe/Madrid"
   max_alerts_per_day: 5
 

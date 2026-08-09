@@ -49,11 +49,13 @@ class TelegramAlerter:
 
         if not self.bot_token:
             logger.warning(
-                "TELEGRAM_BOT_TOKEN not set — TelegramAlerter will be a no-op."
+                "TELEGRAM_BOT_TOKEN not set — TelegramAlerter.send_alert() "
+                "will log an error and return False."
             )
         if not self.chat_id:
             logger.warning(
-                "CHAT_ID not set — TelegramAlerter will be a no-op."
+                "CHAT_ID not set — TelegramAlerter.send_alert() "
+                "will log an error and return False."
             )
 
         # Initialise the telegram Bot directly (lazy — no network I/O)
@@ -76,8 +78,8 @@ class TelegramAlerter:
             flags: Optional scoring flags (warnings) to include in the message.
 
         Returns:
-            True if the message was sent (or would have been sent when
-            credentials are missing), False on failure.
+            True if the message was sent, False otherwise (missing/invalid
+            credentials or send failure).
         """
         if not self.bot_token or not self.chat_id or not self._app:
             logger.error(

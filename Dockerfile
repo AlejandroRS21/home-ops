@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv in builder only.
-RUN pip install --no-cache-dir uv
+# Install uv in builder only (pinned for reproducibility).
+RUN pip install --no-cache-dir uv==0.11.19
 
 # Copy lockfile + project metadata, then export the resolved deps to a wheel
 # directory. This gives a pinned, reproducible dependency set without ever
@@ -17,6 +17,12 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 RUN uv export --no-hashes --no-dev --no-emit-project -o /tmp/requirements.txt \
     && pip wheel --no-cache-dir --wheel-dir /wheels -r /tmp/requirements.txt
+# Stage the pinned hatchling build backend and its helper deps for the runner.
+# --no-deps keeps hatchling's "packaging" from re-resolving to a newer wheel
+# than the uv-pinned one already in /wheels (pathspec/pluggy/tomlkit/
+# trove-classifiers/editables are leaf packages with no transitive conflicts).
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /wheels hatchling==1.32.0 \
+    && pip wheel --no-cache-dir --no-deps --wheel-dir /wheels pathspec pluggy tomlkit trove-classifiers editables
 
 
 # ─── Runner stage ────────────────────────────────────────────────────────────
@@ -36,9 +42,12 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
 COPY src /app/src
 COPY config /app/config
 COPY pyproject.toml /app/
-# Isolated PEP 517 build so the hatchling backend is installed in a throwaway
-# build env, keeping the runtime image free of build tooling.
-RUN pip install --no-cache-dir --no-deps -e .
+# Isolated PEP 517 build normally fetches hatchling from PyPI at build time.
+# The pinned hatchling wheel is already staged in /wheels by the builder, so
+# --no-build-isolation resolves it offline; it is removed afterwards so the
+# runtime image ships without build tooling.
+RUN pip install --no-cache-dir --no-deps --no-build-isolation -e .
+RUN pip uninstall -y hatchling
 
 # Run as a non-root user. uid 10001 is the conventional "scratch" service UID.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin homeops \

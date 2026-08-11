@@ -806,6 +806,86 @@ class TestRunScanExtra:
         assert row[0] == "queued"  # still queued
         mock_send_alert.assert_not_called()
 
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_failed_requeue_skips_listings_still_pending_approval(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
+    ) -> None:
+        """GIVEN failed row for a listing still pending approval WHEN scan runs
+        THEN delivered exactly once via step-3 (no step-4 duplicate), while a
+        failed row for a non-pending listing IS re-attempted by step-4."""
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=0)
+        mock_load_config.return_value.hitl_approval_required = True
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+        mock_send_alert.return_value = True
+        mock_subsequent.return_value = []
+
+        # Listing approved but not yet alerted — step-3 pipeline owns it,
+        # and a stale 'failed' row from the previous day exists (R3-1 source)
+        pending = Listing(
+            content_hash="failed_pending_001",
+            url="https://test.com/pending",
+            address="Calle Pending 1",
+            price=Decimal("100000"),
+            m2=80.0,
+        )
+        pending_id = db.insert_listing(pending)
+        db.conn.execute(
+            "INSERT INTO pending_approvals (listing_id, approved, alerted) "
+            "VALUES (?, TRUE, FALSE)",
+            [pending_id],
+        )
+        yesterday = datetime.now(UTC) - timedelta(days=1)
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'failed')",
+            [pending.content_hash, yesterday],
+        )
+
+        # Not pending approval — step-4 must still re-attempt this one
+        other = Listing(
+            content_hash="failed_other_002",
+            url="https://test.com/other",
+            address="Calle Other 1",
+            price=Decimal("100000"),
+            m2=80.0,
+        )
+        db.insert_listing(other)
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) VALUES (?, ?, 'failed')",
+            [other.content_hash, yesterday],
+        )
+
+        _run_scan()
+
+        sends = [call.args[0].content_hash for call in mock_send_alert.call_args_list]
+        # exactly once via step-3 approval path — no step-4 duplicate
+        assert sends.count(pending.content_hash) == 1
+        # step-4 re-attempt for the non-pending failed row still works
+        assert sends.count(other.content_hash) == 1
+        other_row = db.conn.execute(
+            "SELECT status FROM daily_alert_log WHERE listing_hash = ?",
+            [other.content_hash],
+        ).fetchone()
+        assert other_row is not None
+        assert other_row[0] == "sent"
+
     @patch("home_ops.cli.app.get_connection")
     @patch("home_ops.cli.app.load_config")
     @patch("home_ops.scraper.lifecycle.cold_start")

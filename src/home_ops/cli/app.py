@@ -608,6 +608,11 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             "SELECT dlh.id, dlh.listing_hash, dlh.sent_at FROM daily_alert_log dlh "
             "WHERE dlh.status IN ('queued', 'failed') "
             "AND (dlh.sent_at IS NULL OR dlh.sent_at < ?) "
+            "AND NOT EXISTS (SELECT 1 FROM pending_approvals pa "
+            "JOIN listings l ON l.id = pa.listing_id "
+            "WHERE l.content_hash = dlh.listing_hash AND pa.alerted = FALSE) "
+            "AND NOT EXISTS (SELECT 1 FROM daily_alert_log d2 "
+            "WHERE d2.listing_hash = dlh.listing_hash AND d2.status = 'sent') "
             "ORDER BY dlh.id ASC",
             [today_start],
         ).fetchall()

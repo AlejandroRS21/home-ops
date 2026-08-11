@@ -11,11 +11,26 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any
+
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from home_ops.models.schema import Listing
 
 logger = logging.getLogger(__name__)
+
+# Transient send failures are retried with backoff; permanent errors (e.g.
+# BadRequest, Forbidden) fail immediately. Backoff values are seconds per
+# retry attempt, indexed by attempt number.
+#
+# Matching is by exact class, not isinstance: BadRequest subclasses
+# NetworkError in python-telegram-bot >= 22 (verified 22.8), so an isinstance
+# gate would retry permanent 400 errors. Exact-type membership retries only
+# the three explicitly transient classes.
+TRANSIENT = {TimedOut, NetworkError, RetryAfter}
+RETRIES = 2
+BACKOFF = (1.0, 2.0)
 
 
 class TelegramAlerter:
@@ -79,7 +94,7 @@ class TelegramAlerter:
 
         Returns:
             True if the message was sent, False otherwise (missing/invalid
-            credentials or send failure).
+            credentials or send failure after transient retries are exhausted).
         """
         if not self.bot_token or not self.chat_id or not self._app:
             logger.error(
@@ -89,13 +104,27 @@ class TelegramAlerter:
             return False
 
         message = self._format_listing_message(listing, score, flags)
-        try:
-            self._run_sync(self._app.send_message(chat_id=self.chat_id, text=message))
-            logger.info("Alert sent for %s (score=%.1f)", listing.url, score)
-            return True
-        except Exception:
-            logger.exception("Failed to send Telegram alert for %s", listing.url)
-            return False
+        for attempt in range(RETRIES + 1):
+            try:
+                self._run_sync(self._app.send_message(chat_id=self.chat_id, text=message))
+                logger.info("Alert sent for %s (score=%.1f)", listing.url, score)
+                return True
+            except Exception as exc:
+                if type(exc) not in TRANSIENT or attempt >= RETRIES:
+                    logger.exception("Failed to send Telegram alert for %s", listing.url)
+                    return False
+                backoff = BACKOFF[attempt]
+                logger.warning(
+                    "Transient Telegram failure for %s (attempt %d/%d), "
+                    "retrying in %.1fs: %s",
+                    listing.url,
+                    attempt + 1,
+                    RETRIES + 1,
+                    backoff,
+                    exc,
+                )
+                time.sleep(backoff)
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers

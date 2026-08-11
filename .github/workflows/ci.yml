@@ -62,3 +62,50 @@ jobs:
 
       - name: Smoke test Python import
         run: docker run --rm homeops-smoke:latest python -c "import home_ops; print('IMPORT_OK')"
+
+      - name: Smoke test profile bootstrap from empty config dir
+        run: |
+          CFG_DIR=$(mktemp -d)
+          DATA_VOL=$(docker volume create)
+          docker run -d --name homeops-bootstrap \
+            -v "$CFG_DIR":/app/config:ro \
+            -v "$DATA_VOL":/app/data \
+            homeops-smoke:latest
+          STATUS=""
+          for _ in $(seq 1 60); do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' homeops-bootstrap 2>/dev/null || true)
+            [ "$STATUS" = "healthy" ] && break
+            sleep 2
+          done
+          if [ "$STATUS" != "healthy" ]; then
+            docker logs homeops-bootstrap
+            echo "Bootstrap container never became healthy"
+            docker rm -f homeops-bootstrap
+            exit 1
+          fi
+          # Profile provisioned from template into the data volume
+          docker exec homeops-bootstrap test -f /app/data/user_profile.yml
+          docker cp homeops-bootstrap:/app/data/user_profile.yml /tmp/bootstrap_first.yml
+          docker rm -f homeops-bootstrap
+
+          # Second boot over the SAME data volume: idempotent, no overwrite
+          docker run -d --name homeops-bootstrap-2 \
+            -v "$CFG_DIR":/app/config:ro \
+            -v "$DATA_VOL":/app/data \
+            homeops-smoke:latest
+          STATUS=""
+          for _ in $(seq 1 60); do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' homeops-bootstrap-2 2>/dev/null || true)
+            [ "$STATUS" = "healthy" ] && break
+            sleep 2
+          done
+          if [ "$STATUS" != "healthy" ]; then
+            docker logs homeops-bootstrap-2
+            docker rm -f homeops-bootstrap-2
+            docker volume rm "$DATA_VOL"
+            exit 1
+          fi
+          docker cp homeops-bootstrap-2:/app/data/user_profile.yml /tmp/bootstrap_second.yml
+          cmp -s /tmp/bootstrap_first.yml /tmp/bootstrap_second.yml
+          docker rm -f homeops-bootstrap-2
+          docker volume rm "$DATA_VOL"

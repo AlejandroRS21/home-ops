@@ -846,6 +846,153 @@ class TestRunScanExtra:
         assert row[0] == 0
 
 
+class TestApprovedAlertRetry:
+    """Approved-alert delivery: alerted set only on success, no log row on failure."""
+
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_approved_alert_failure_keeps_pending_until_success(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
+    ) -> None:
+        """GIVEN approved send fails THEN alerted stays FALSE with no log row;
+        WHEN it succeeds next cycle THEN alerted=TRUE with a 'sent' row.
+
+        Verifies design D3: on failure no daily_alert_log row is written, so
+        the approved listing is re-picked solely via pending_approvals.alerted.
+        """
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=50)
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+
+        listing = Listing(
+            content_hash="approved_retry",
+            url="https://test.com/approved-retry",
+            address="Calle Approved 1",
+            price=Decimal("150000"),
+            m2=75.0,
+        )
+        inserted_id = db.insert_listing(listing)
+        assert inserted_id is not None
+        db.conn.execute(
+            "INSERT INTO pending_approvals (listing_id, approved, score) "
+            "VALUES (?, TRUE, ?)",
+            [inserted_id, 80.0],
+        )
+
+        mock_cold_start.return_value = []
+        mock_subsequent.return_value = []
+
+        # Cycle 1 — send fails: alerted must stay FALSE and no log row written
+        mock_send_alert.return_value = False
+        _run_scan()
+        pending = db.conn.execute(
+            "SELECT alerted FROM pending_approvals WHERE listing_id = ?",
+            [inserted_id],
+        ).fetchone()
+        assert pending is not None
+        assert pending[0] is False
+        log_count = db.conn.execute("SELECT COUNT(*) FROM daily_alert_log").fetchone()[0]
+        assert log_count == 0
+        mock_send_alert.assert_called_once()
+
+        # Cycle 2 — send succeeds: alerted=TRUE and a 'sent' log row
+        mock_send_alert.return_value = True
+        _run_scan()
+        pending = db.conn.execute(
+            "SELECT alerted FROM pending_approvals WHERE listing_id = ?",
+            [inserted_id],
+        ).fetchone()
+        assert pending is not None
+        assert pending[0] is True
+        log_row = db.conn.execute(
+            "SELECT listing_hash, status FROM daily_alert_log"
+        ).fetchone()
+        assert log_row is not None
+        assert log_row == (listing.content_hash, "sent")
+        assert mock_send_alert.call_count == 2
+
+
+class TestFailedRowRequeue:
+    """Previously-failed daily_alert_log rows must be re-selected for delivery."""
+
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_failed_row_with_null_sent_at_requeued_and_sent(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_load_config: MagicMock,
+        mock_get_conn: MagicMock,
+        mock_subsequent: MagicMock,
+    ) -> None:
+        """GIVEN daily_alert_log row status='failed', sent_at=NULL WHEN scan runs
+        THEN it is re-selected, sent exactly once and marked 'sent'."""
+        from home_ops.models.schema import Listing
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=0)
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig()
+
+        listing = Listing(
+            content_hash="failed_requeue",
+            url="https://test.com/failed-requeue",
+            address="Calle Failed 1",
+            price=Decimal("120000"),
+            m2=70.0,
+        )
+        db.insert_listing(listing)
+
+        # Seed a failed row with explicit NULL sent_at (defensive branch of the
+        # step-4 predicate; schema default would stamp CURRENT_TIMESTAMP).
+        db.conn.execute(
+            "INSERT INTO daily_alert_log (listing_hash, sent_at, status) "
+            "VALUES (?, NULL, 'failed')",
+            ["failed_requeue"],
+        )
+
+        mock_cold_start.return_value = []
+        mock_subsequent.return_value = []
+        mock_send_alert.return_value = True
+
+        _run_scan()
+
+        row = db.conn.execute(
+            "SELECT status, sent_at FROM daily_alert_log WHERE listing_hash = ?",
+            ["failed_requeue"],
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "sent"
+        assert row[1] is not None  # stamped on successful re-send
+        mock_send_alert.assert_called_once()
+
+
 class TestRunDaemonCycle:
     """Tests for _run_daemon_cycle daemon loop body."""
 

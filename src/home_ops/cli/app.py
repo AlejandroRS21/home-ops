@@ -579,31 +579,35 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 continue
 
             success = alerter.send_alert(listing, score, flags)
-            db.conn.execute(
-                "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
-                [listing_id],
-            )
-            status = "sent" if success else "failed"
-            db.conn.execute(
-                "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, ?)",
-                [listing.content_hash, status],
-            )
             if success:
+                db.conn.execute(
+                    "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
+                    [listing_id],
+                )
+                status = "sent"
+                db.conn.execute(
+                    "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, ?)",
+                    [listing.content_hash, status],
+                )
                 console.print(
                     f"  [green]Alert sent (approved):[/green] {listing.address or listing.url} "
                     f"(score {score:.1f})"
                 )
             else:
+                # No log row on failure (design D3): alerted stays FALSE so the
+                # row is re-picked next cycle; a 'failed' row would double-send
+                # via the step-4 requeue.
                 console.print(
                     f"  [red]Alert failed (approved):[/red] {listing.address or listing.url} "
                     f"(score {score:.1f})"
                 )
 
-        # 4. Re-attempt queued alerts from previous days (always runs)
+        # 4. Re-attempt queued/failed alerts from previous days (always runs)
         today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         queued_rows = db.conn.execute(
             "SELECT dlh.id, dlh.listing_hash, dlh.sent_at FROM daily_alert_log dlh "
-            "WHERE dlh.status = 'queued' AND dlh.sent_at IS NOT NULL AND dlh.sent_at < ? "
+            "WHERE dlh.status IN ('queued', 'failed') "
+            "AND (dlh.sent_at IS NULL OR dlh.sent_at < ?) "
             "ORDER BY dlh.id ASC",
             [today_start],
         ).fetchall()

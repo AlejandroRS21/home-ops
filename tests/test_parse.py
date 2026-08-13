@@ -6,6 +6,7 @@ mocked in ``sys.modules``. We clean it up here to ensure the real scrapling
 """
 
 import sys
+from pathlib import Path
 from typing import Any
 
 # Guard: remove any stale scrapling mock from test_lifecycle.py
@@ -23,8 +24,11 @@ from home_ops.scraper.parse import (  # noqa: E402
     _extract_price,
     _extract_rooms,
     _skip_sponsored,
+    parse_detail,
     parse_listings,
 )
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 class TestSkipSponsored:
@@ -321,3 +325,100 @@ class TestParseListings:
         assert len(result) == 1
         assert result[0]["price_includes_garage"] is True
         assert result[0]["external_id"] == "200001"
+
+
+DETAIL_FULL_HTML = """<html><body>
+<div id="details">
+  <div class="detail-info">
+    <span class="txt">Precio del garaje</span>
+    <span class="value">15.000€</span>
+  </div>
+  <div class="detail-info">
+    <span class="txt">Certificado energético</span>
+    <span class="value">A</span>
+  </div>
+</div>
+</body></html>"""
+
+DETAIL_NO_GARAGE_OR_CERT_HTML = """<html><body>
+<div id="details">
+  <div class="detail-info">
+    <span class="txt">Superficie</span>
+    <span class="value">80 m²</span>
+  </div>
+</div>
+</body></html>"""
+
+DETAIL_TRAMITE_HTML = """<html><body>
+<div id="details">
+  <div class="detail-info">
+    <span class="txt">Certificado energético</span>
+    <span class="value">En trámite</span>
+  </div>
+</div>
+</body></html>"""
+
+DETAIL_GARAGE_INCLUDED_HTML = """<html><body>
+<div id="details">
+  <div class="detail-info">
+    <span class="txt">Precio del garaje</span>
+    <span class="value">Incluido en el precio</span>
+  </div>
+</div>
+</body></html>"""
+
+
+class TestParseDetail:
+    """parse_detail unit tests (detail-page rows: span.txt label / span.value)."""
+
+    def test_full_detail_page(self) -> None:
+        """GIVEN garage price + certificate blocks WHEN parse_detail THEN Decimal + True."""
+        result = parse_detail(DETAIL_FULL_HTML)
+        assert result["garage_price"] == Decimal("15000")
+        assert result["certificado_energetico_present"] is True
+        assert result["price_includes_garage_override"] is None
+
+    def test_calificacion_label_variant(self) -> None:
+        """GIVEN 'Calificación energética' label WHEN parse_detail THEN cert True."""
+        html = """<html><body><div id="details">
+          <div class="detail-info">
+            <span class="txt">Calificación energética</span>
+            <span class="value">B</span>
+          </div>
+        </div></body></html>"""
+        result = parse_detail(html)
+        assert result["certificado_energetico_present"] is True
+
+    def test_missing_sections_are_none_not_false(self) -> None:
+        """GIVEN detail HTML without garage/cert rows WHEN parse_detail THEN None/None."""
+        result = parse_detail(DETAIL_NO_GARAGE_OR_CERT_HTML)
+        assert result["garage_price"] is None
+        assert result["certificado_energetico_present"] is None
+        assert result["price_includes_garage_override"] is None
+
+    def test_tramite_is_true(self) -> None:
+        """GIVEN cert block marked 'En trámite' WHEN parse_detail THEN cert True."""
+        result = parse_detail(DETAIL_TRAMITE_HTML)
+        assert result["certificado_energetico_present"] is True
+
+    def test_empty_input_all_none(self) -> None:
+        """GIVEN empty or whitespace html WHEN parse_detail THEN all fields None."""
+        for html in ("", "   \n\t  "):
+            result = parse_detail(html)
+            assert result["garage_price"] is None
+            assert result["certificado_energetico_present"] is None
+            assert result["price_includes_garage_override"] is None
+
+    def test_garage_included_in_price_is_none(self) -> None:
+        """GIVEN garage value 'Incluido en el precio' WHEN parse_detail THEN None (never force)."""
+        result = parse_detail(DETAIL_GARAGE_INCLUDED_HTML)
+        assert result["garage_price"] is None
+
+    def test_fixture_file_offline(self) -> None:
+        """GIVEN committed fixture WHEN parse_detail offline THEN fields match (DET-004)."""
+        html = (FIXTURES_DIR / "idealista_detail.html").read_text(encoding="utf-8")
+        result = parse_detail(html)
+        # Fixture row: "Incluido en el precio" -> not forced, stays None.
+        assert result["garage_price"] is None
+        # Fixture row: "En trámite" -> certificate present.
+        assert result["certificado_energetico_present"] is True

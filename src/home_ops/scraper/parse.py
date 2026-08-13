@@ -2,6 +2,7 @@
 
 Public interface:
     parse_listings(html: str) -> list[dict[str, Any]]
+    parse_detail(html: str) -> dict[str, Any]
 """
 
 from __future__ import annotations
@@ -205,6 +206,65 @@ def parse_listings(html: str) -> list[dict[str, Any]]:
         logger.info("Skipped %d sponsored listing(s)", sponsored_count)
 
     return results
+
+
+_GARAGE_LABEL = "precio del garaje"
+_CERT_LABELS = ("certificado energético", "calificación energética")
+_DETAIL_EMPTY = {
+    "garage_price": None,
+    "certificado_energetico_present": None,
+    "price_includes_garage_override": None,
+}
+
+
+def _detail_rows(page: Selector) -> list[Selector]:
+    """Return the ``#details div.detail-info`` rows of a detail page."""
+    return page.css("#details div.detail-info")
+
+
+def _row_label(row: Selector) -> str:
+    """Return the row label text (``span.txt``), trimmed."""
+    label = row.css("span.txt")
+    return label[0].css("::text").get("").strip() if label else ""
+
+
+def _row_value(row: Selector) -> str:
+    """Return the row value text (``span.value``), trimmed."""
+    value = row.css("span.value")
+    return value[0].css("::text").get("").strip() if value else ""
+
+
+def parse_detail(html: str) -> dict[str, Any]:
+    """Parse an Idealista detail page into garage/energy fields.
+
+    Anchors are text rows under ``#details div.detail-info`` with a
+    ``span.txt`` label and ``span.value`` value. Row presence is the signal:
+    a certificate row (even "En trámite") means the certificate exists; a
+    garage row whose value is "Incluido en el precio" is never forced to a
+    price (``_extract_price`` returns None).
+
+    Returns:
+        ``{"garage_price": Decimal|None, "certificado_energetico_present":
+        bool|None, "price_includes_garage_override": None}``. No selector
+        match yields None — the parser never guesses a value.
+    """
+    if not html or not html.strip():
+        return dict(_DETAIL_EMPTY)
+
+    page = Selector(html)
+    garage_price: Decimal | None = None
+    cert_present: bool | None = None
+    for row in _detail_rows(page):
+        label = _row_label(row).lower()
+        if label == _GARAGE_LABEL and garage_price is None:
+            garage_price = _extract_price(_row_value(row))
+        elif label in _CERT_LABELS and cert_present is None:
+            cert_present = True
+    return {
+        "garage_price": garage_price,
+        "certificado_energetico_present": cert_present,
+        "price_includes_garage_override": None,
+    }
 
 
 

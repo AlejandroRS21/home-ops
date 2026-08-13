@@ -1,0 +1,36 @@
+<!--
+  Curated fixture: derived-from-known-structure — confirm against one real capture at apply.
+  Sanitized: scripts, ads and PII stripped; address genericized ("Calle Ejemplo").
+  Anchors (design decision #2): rows are `#details div.detail-info`; label is
+  `span.txt`, value is `span.value`. Garage row value "Incluido en el precio"
+  MUST NOT be forced to a price (parser returns None). Certificate row marked
+  "En trámite" MUST yield certificado_energetico_present=True.
+-->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Piso en Calle Ejemplo</title>
+</head>
+<body>
+  <main>
+    <section class="advertiser-info">
+      <span class="name">Agencia Ejemplo S.L.</span>
+    </section>
+    <div id="details" class="details-block">
+      <div class="detail-info">
+        <span class="txt">Superficie</span>
+        <span class="value">80 m²</span>
+      </div>
+      <div class="detail-info">
+        <span class="txt">Precio del garaje</span>
+        <span class="value">Incluido en el precio</span>
+      </div>
+      <div class="detail-info">
+        <span class="txt">Certificado energético</span>
+        <span class="value">En trámite</span>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

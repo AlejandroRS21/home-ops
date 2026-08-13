@@ -451,3 +451,67 @@ class TestEuriborDuckDBRoundTrip:
         ).fetchone()
         assert row is not None
         assert row[0] == 2.5
+
+
+# ===================================================================
+# DET-005 — Detail field activation (zero scorer diffs proof)
+# ===================================================================
+
+
+class TestDetailFieldActivation:
+    """Detail-page fields activate their dimensions at declared weights (DET-005)."""
+
+    def test_garage_price_activates_garage_dim(self, config_with_scoring: Config) -> None:
+        """GIVEN garage_price > 0 WHEN scored THEN garage dim 1.0 / 0.10, weights unadjusted."""
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(config_with_scoring)
+        listing = Listing(
+            content_hash="activation_garage_001",
+            price=Decimal("200000"),
+            m2=90.0,
+            certificado_energetico_present=True,
+            garage_price=Decimal("15000"),
+        )
+        result = scorer.score(listing)
+        garage_dim = [d for d in result.dimensions if d.name == "garage"][0]
+        assert garage_dim.score == 1.0
+        assert garage_dim.weight == 0.10
+        assert result.weights_adjusted is False
+
+    def test_cert_true_activates_energy_dim(self, config_with_scoring: Config) -> None:
+        """GIVEN certificado True WHEN scored THEN energy_cert dim 1.0 at weight 0.15."""
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(config_with_scoring)
+        listing = Listing(
+            content_hash="activation_energy_001",
+            price=Decimal("200000"),
+            m2=90.0,
+            certificado_energetico_present=True,
+            garage_price=Decimal("15000"),
+        )
+        result = scorer.score(listing)
+        energy_dim = [d for d in result.dimensions if d.name == "energy_cert"][0]
+        assert energy_dim.score == 1.0
+        assert energy_dim.weight == 0.15
+        assert result.weights_adjusted is False
+
+    def test_no_detail_fields_adjusts_weights(self, config_with_scoring: Config) -> None:
+        """GIVEN garage and cert None WHEN scored THEN dims absent and weights adjusted."""
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(config_with_scoring)
+        listing = Listing(
+            content_hash="activation_none_001",
+            price=Decimal("200000"),
+            m2=90.0,
+        )
+        result = scorer.score(listing)
+        assert result.weights_adjusted is True
+        dim_names = {d.name for d in result.dimensions}
+        assert "garage" not in dim_names
+        assert "energy_cert" not in dim_names

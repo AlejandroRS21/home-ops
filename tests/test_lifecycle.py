@@ -5,8 +5,10 @@ NOTE: The ``cold_start`` function imports ``StealthyFetcher`` lazily via
 to avoid requiring ``curl_cffi`` at test time.
 """
 
+import logging
 import sys
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -25,10 +27,23 @@ sys.modules["scrapling"] = _mock_scrapling
 sys.modules["scrapling.parser"] = _mock_scrapling.parser
 
 from home_ops.models.data_storage import DuckDBConnection  # noqa: E402
+from home_ops.models.schema import Listing  # noqa: E402
 from home_ops.scraper.lifecycle import (  # noqa: E402
     SNAPSHOT_DIR,
     invalidate_snapshots,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep() -> None:
+    """Keep the enrichment delay out of unit tests.
+
+    TestEnrichment tests patch ``time.sleep`` explicitly to assert the calls;
+    this fixture only prevents real 1.5s sleeps in legacy cold_start /
+    subsequent_run tests.
+    """
+    with patch("home_ops.scraper.lifecycle.time.sleep"):
+        yield
 
 
 class TestSnapshotDir:
@@ -119,8 +134,8 @@ class TestColdStart:
         assert len(result) == 2
         assert result[0].external_id == "1"
         assert result[1].external_id == "2"
-        # Should have fetched page 1 (base URL), page 2, page 3
-        assert mock_fetch.call_count == 3
+        # 3 pagination fetches (pages 1-3) + 2 enrichment detail fetches
+        assert mock_fetch.call_count == 5
 
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._fetch_page_text")
@@ -148,7 +163,8 @@ class TestColdStart:
 
         result = cold_start("https://www.idealista.com/test", max_pages=5)
         assert len(result) == 2
-        assert mock_fetch.call_count == 3  # only 3 pages fetched, not 5
+        # 3 pagination fetches (early stop) + 2 enrichment detail fetches
+        assert mock_fetch.call_count == 5  # only 3 pages fetched, not 5
 
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._fetch_page_text")
@@ -333,8 +349,8 @@ class TestSubsequentRun:
         result = subsequent_run(BASE_URL, MagicMock())
         assert len(result) == 1
         assert result[0].content_hash == "07e82d979e4fc0bf"
-        # Should have fetched page 1 and page 2, but NOT page 3
-        assert mock_fetch.call_count == 2
+        # 2 pagination fetches (page 1 + page 2) + 1 enrichment detail fetch
+        assert mock_fetch.call_count == 3
 
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._save_snapshot")
@@ -449,3 +465,211 @@ class TestSubsequentRun:
         closed_db = DuckDBConnection(":memory:")  # not connected — no connect() call
         with pytest.raises(RuntimeError):
             subsequent_run(BASE_URL, closed_db)
+
+
+class TestEnrichment:
+    """Detail-page enrichment: sequential spacing, fetch cap, and degrade."""
+
+    @staticmethod
+    def _listing(
+        hash_: str,
+        url: str,
+        *,
+        garage: Decimal | None = None,
+        cert: bool | None = None,
+    ) -> Listing:
+        """Build a Listing with the given detail fields (summary defaults)."""
+        return Listing(
+            content_hash=hash_,
+            url=url,
+            address=f"Addr {hash_}",
+            garage_price=garage,
+            certificado_energetico_present=cert,
+        )
+
+    @staticmethod
+    def _parsed(garage: str = "15000", cert: bool = True) -> dict:
+        """A non-empty parse_detail result."""
+        return {
+            "garage_price": Decimal(garage),
+            "certificado_energetico_present": cert,
+            "price_includes_garage_override": None,
+        }
+
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_detail")
+    @patch("home_ops.scraper.lifecycle.time.sleep")
+    def test_sequential_sleeps_before_each_fetch(
+        self,
+        mock_sleep: MagicMock,
+        mock_parse_detail: MagicMock,
+        mock_fetch: MagicMock,
+    ) -> None:
+        """GIVEN 3 new listings WHEN enriched THEN sleep 1.5 before each of 3 fetches in order."""
+        from home_ops.scraper.lifecycle import DETAIL_DELAY_SECONDS, _enrich_new_listings
+
+        listings = [
+            self._listing("h1", "https://ex.com/1"),
+            self._listing("h2", "https://ex.com/2"),
+            self._listing("h3", "https://ex.com/3"),
+        ]
+        mock_parse_detail.return_value = self._parsed()
+        sequence: list[tuple[str, object]] = []
+
+        def _record_fetch(fetcher: object, url: str) -> str:
+            sequence.append(("fetch", url))
+            return "<html>detail</html>"
+
+        def _record_sleep(seconds: float) -> None:
+            sequence.append(("sleep", seconds))
+
+        mock_fetch.side_effect = _record_fetch
+        mock_sleep.side_effect = _record_sleep
+
+        _enrich_new_listings(listings, MagicMock())
+
+        # One sleep of DETAIL_DELAY_SECONDS per detail fetch, interleaved before each fetch
+        assert mock_sleep.call_count == 3
+        mock_sleep.assert_called_with(DETAIL_DELAY_SECONDS)
+        assert sequence == [
+            ("sleep", DETAIL_DELAY_SECONDS),
+            ("fetch", "https://ex.com/1"),
+            ("sleep", DETAIL_DELAY_SECONDS),
+            ("fetch", "https://ex.com/2"),
+            ("sleep", DETAIL_DELAY_SECONDS),
+            ("fetch", "https://ex.com/3"),
+        ]
+        # Parsed fields applied to each listing
+        assert listings[0].garage_price == Decimal("15000")
+        assert listings[0].certificado_energetico_present is True
+        assert listings[2].garage_price == Decimal("15000")
+
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_detail")
+    @patch("home_ops.scraper.lifecycle.time.sleep")
+    def test_fetch_cap_limits_detail_fetches(
+        self,
+        mock_sleep: MagicMock,
+        mock_parse_detail: MagicMock,
+        mock_fetch: MagicMock,
+    ) -> None:
+        """GIVEN 12 listings WHEN enriched THEN exactly DETAIL_FETCH_CAP fetches; 2 keep None."""
+        from home_ops.scraper.lifecycle import DETAIL_FETCH_CAP, _enrich_new_listings
+
+        listings = [self._listing(f"h{i}", f"https://ex.com/{i}") for i in range(12)]
+        mock_fetch.return_value = "<html>detail</html>"
+        mock_parse_detail.return_value = self._parsed()
+
+        _enrich_new_listings(listings, MagicMock())
+
+        assert DETAIL_FETCH_CAP == 10
+        assert mock_fetch.call_count == 10
+        assert mock_sleep.call_count == 10
+        # First 10 enriched, last 2 keep summary (None)
+        assert listings[0].garage_price == Decimal("15000")
+        assert listings[9].garage_price == Decimal("15000")
+        assert listings[10].garage_price is None
+        assert listings[11].garage_price is None
+        assert listings[11].certificado_energetico_present is None
+
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_detail")
+    @patch("home_ops.scraper.lifecycle.time.sleep")
+    def test_fetch_failure_degrades_keeping_listing(
+        self,
+        mock_sleep: MagicMock,
+        mock_parse_detail: MagicMock,
+        mock_fetch: MagicMock,
+    ) -> None:
+        """GIVEN a detail fetch raises WHEN enriched THEN warning logged, listing kept."""
+        from home_ops.scraper.lifecycle import _enrich_new_listings
+
+        listings = [
+            self._listing("h1", "https://ex.com/1"),
+            self._listing("h2", "https://ex.com/2"),
+            self._listing("h3", "https://ex.com/3"),
+        ]
+
+        def _fail_second(fetcher: object, url: str) -> str:
+            if url == "https://ex.com/2":
+                raise RuntimeError("network down")
+            return "<html>detail</html>"
+
+        mock_fetch.side_effect = _fail_second
+        mock_parse_detail.return_value = self._parsed("5000", cert=False)
+        logger = logging.getLogger("home_ops.scraper.lifecycle")
+        with patch.object(logger, "warning") as mock_warning:
+            _enrich_new_listings(listings, MagicMock())
+
+        # Failed listing kept with summary values; run continues
+        assert len(listings) == 3
+        assert listings[1].garage_price is None
+        mock_warning.assert_called_once()
+        assert mock_warning.call_args.args[0] == (
+            "Detail fetch failed for %s: %s — keeping summary data"
+        )
+        assert mock_warning.call_args.args[1] == "https://ex.com/2"
+        assert isinstance(mock_warning.call_args.args[2], RuntimeError)
+        # Siblings still enriched
+        assert listings[0].garage_price == Decimal("5000")
+        assert listings[2].garage_price == Decimal("5000")
+
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_detail")
+    @patch("home_ops.scraper.lifecycle.time.sleep")
+    def test_parse_empty_keeps_existing_summary_values(
+        self,
+        mock_sleep: MagicMock,
+        mock_parse_detail: MagicMock,
+        mock_fetch: MagicMock,
+    ) -> None:
+        """GIVEN parse_detail all None WHEN enriched THEN existing non-None fields preserved."""
+        from home_ops.scraper.lifecycle import _enrich_new_listings
+
+        listings = [
+            self._listing("h1", "https://ex.com/1", garage=Decimal("12000"), cert=True),
+            self._listing("h2", "https://ex.com/2"),
+        ]
+        mock_fetch.return_value = "<html>detail</html>"
+        mock_parse_detail.return_value = {
+            "garage_price": None,
+            "certificado_energetico_present": None,
+            "price_includes_garage_override": None,
+        }
+
+        _enrich_new_listings(listings, MagicMock())
+
+        # Never overwrite existing non-None values with None
+        assert listings[0].garage_price == Decimal("12000")
+        assert listings[0].certificado_energetico_present is True
+        # Listing with no prior fields stays None; both listings kept
+        assert listings[1].garage_price is None
+        assert len(listings) == 2
+
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_detail")
+    @patch("home_ops.scraper.lifecycle.time.sleep")
+    def test_empty_url_is_skipped(
+        self,
+        mock_sleep: MagicMock,
+        mock_parse_detail: MagicMock,
+        mock_fetch: MagicMock,
+    ) -> None:
+        """GIVEN a listing with empty url WHEN enriched THEN no fetch or sleep for it."""
+        from home_ops.scraper.lifecycle import _enrich_new_listings
+
+        listings = [
+            self._listing("h1", ""),
+            self._listing("h2", "https://ex.com/2"),
+        ]
+        mock_fetch.return_value = "<html>detail</html>"
+        mock_parse_detail.return_value = self._parsed("3000")
+
+        _enrich_new_listings(listings, MagicMock())
+
+        mock_fetch.assert_called_once()
+        assert mock_fetch.call_args.args[1] == "https://ex.com/2"
+        assert mock_sleep.call_count == 1
+        # Skipped listing keeps summary values
+        assert listings[0].garage_price is None
+        assert listings[1].garage_price == Decimal("3000")

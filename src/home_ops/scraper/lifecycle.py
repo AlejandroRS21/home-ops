@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from home_ops.models.schema import Listing
 from home_ops.scraper.dedup import batch_known_hashes, compute_content_hash
-from home_ops.scraper.parse import parse_listings
+from home_ops.scraper.parse import parse_detail, parse_listings
 
 if TYPE_CHECKING:
     from home_ops.models.data_storage import DuckDBConnection
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR = Path("data/snapshots")
+
+DETAIL_DELAY_SECONDS = 1.5
+DETAIL_FETCH_CAP = 10
 
 
 def _fetch_page_text(fetcher: Any, url: str) -> str:
@@ -105,6 +109,38 @@ def _get_fetcher() -> Any:
     return _StealthyFetcher()
 
 
+def _enrich_new_listings(listings: list[Listing], fetcher: Any) -> None:
+    """Enrich new listings with detail-page fields, in place.
+
+    Sequential pass over ``listings[:DETAIL_FETCH_CAP]`` with non-empty URLs.
+    ``time.sleep(DETAIL_DELAY_SECONDS)`` runs before each detail fetch to stay
+    under the portal's rate limits.
+
+    Per-listing failure degrades: the exception is logged as a warning and the
+    listing keeps its summary data, so one bad detail page never aborts the
+    scan. Only non-None parsed values are applied — existing summary values
+    are never overwritten by None.
+    """
+    for listing in listings[:DETAIL_FETCH_CAP]:
+        if not listing.url:
+            continue
+        time.sleep(DETAIL_DELAY_SECONDS)
+        try:
+            html = _fetch_page_text(fetcher, listing.url)
+            parsed = parse_detail(html)
+        except Exception as exc:
+            logger.warning(
+                "Detail fetch failed for %s: %s — keeping summary data",
+                listing.url,
+                exc,
+            )
+            continue
+        if parsed.get("garage_price") is not None:
+            listing.garage_price = parsed["garage_price"]
+        if parsed.get("certificado_energetico_present") is not None:
+            listing.certificado_energetico_present = parsed["certificado_energetico_present"]
+
+
 def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
     """Fetch a portal page from scratch using Scrapling's StealthyFetcher.
 
@@ -171,6 +207,7 @@ def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
         len(all_listings),
         page_num,
     )
+    _enrich_new_listings(all_listings, fetcher)
     return all_listings
 
 
@@ -260,6 +297,7 @@ def subsequent_run(
             )
             break
 
+    _enrich_new_listings(new_listings, fetcher)
     return new_listings
 
 

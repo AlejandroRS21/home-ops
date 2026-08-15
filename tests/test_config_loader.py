@@ -303,8 +303,13 @@ class TestAlertScheduleYAML:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def test_buyer_protection_missing_block_uses_defaults(self) -> None:
-        """GIVEN no buyer_protection block WHEN loaded THEN defaults are used."""
+    def test_buyer_protection_missing_block_opt_out(self) -> None:
+        """GIVEN no buyer_protection block WHEN loaded THEN buyer protection is OFF.
+
+        Buyer protection is opt-in: a missing block must leave
+        ``config.buyer_protection`` as None so existing deployments keep
+        their previous scoring behavior.
+        """
         yaml_data = {
             "portal": {"idealista_url": "https://test.url"},
         }
@@ -314,22 +319,54 @@ class TestAlertScheduleYAML:
 
         try:
             config = load_config(tmp_path)
+            assert config.buyer_protection is None
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_buyer_protection_empty_block_opt_out(self) -> None:
+        """GIVEN an empty buyer_protection block WHEN loaded THEN it stays OFF."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+            "buyer_protection": {},
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            assert config.buyer_protection is None
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_buyer_protection_partial_block_merges_defaults(self) -> None:
+        """GIVEN partial buyer_protection block WHEN loaded THEN omitted sub-keys use defaults."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+            "buyer_protection": {
+                "default_itp_rate": 0.09,
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
             bp = config.buyer_protection
             assert bp is not None
-            assert bp.default_itp_rate == 0.08
+            assert bp.default_itp_rate == 0.09  # from YAML
             assert bp.regional_itp_rates == {
                 "madrid": 0.06,
                 "catalunya": 0.10,
                 "andalucia": 0.07,
-            }
+            }  # default
             assert bp.scam_weights == {
                 "red_flag_text": 40.0,
                 "price_bait": 30.0,
                 "missing_cert": 10.0,
-            }
-            assert bp.mortgage_income_ceiling == 0.35
-            assert bp.down_payment_pct == 0.20
-            assert bp.mortgage_years == 30
+            }  # default
+            assert bp.mortgage_years == 30  # default
         finally:
             tmp_path.unlink(missing_ok=True)
         yaml_data = {

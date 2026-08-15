@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager, suppress
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,35 @@ class DuckDBConnection:
             return row[0] if row else None
         except Exception as exc:
             raise RuntimeError(f"Failed to insert listing: {exc}") from exc
+
+    def update_listing_scam_fields(
+        self,
+        content_hash: str,
+        scam_flags: list[str],
+        scam_risk_score: float,
+        total_acquisition_cost: Decimal | None,
+    ) -> None:
+        """Persist post-score scam-risk fields on an existing listing row.
+
+        Called after scoring so the buyer-protection output is recorded
+        even when the alert is gated. Keyed by content_hash to preserve
+        the ON CONFLICT dedup semantics of insert_listing.
+        """
+        try:
+            self.conn.execute(
+                "UPDATE listings SET scam_flags = ?, scam_risk_score = ?, "
+                "total_acquisition_cost = ? WHERE content_hash = ?",
+                [
+                    scam_flags,
+                    scam_risk_score,
+                    total_acquisition_cost,
+                    content_hash,
+                ],
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to update scam fields for listing {content_hash}: {exc}"
+            ) from exc
 
     def get_listing(self, content_hash: str) -> dict[str, Any] | None:
         """Retrieve a listing by its content hash."""

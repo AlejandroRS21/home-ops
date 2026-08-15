@@ -97,10 +97,11 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
         alert_raw["daily_time"] = alert_raw.pop("time")
     schedule_config = ScheduleConfig(**alert_raw) if alert_raw else ScheduleConfig()
 
-    # Parse buyer_protection section; missing block falls back to defaults
-    buyer_raw = raw.get("buyer_protection", {}) or {}
+    # Parse buyer_protection section; buyer protection is opt-in — a missing
+    # or empty block leaves it None (scoring unchanged for existing setups).
+    buyer_raw = raw.get("buyer_protection")
     buyer_protection = (
-        BuyerProtectionConfig(**buyer_raw) if buyer_raw else BuyerProtectionConfig()
+        BuyerProtectionConfig(**buyer_raw) if buyer_raw else None
     )
 
     return Config(

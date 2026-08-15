@@ -501,6 +501,131 @@ class TestRunScan:
             )
 
 
+class TestScanScamPersistence:
+    """Buyer-protection output must reach the real pipeline: alerts and DB."""
+
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_scan_persists_scam_fields_and_passes_cost_breakdown(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_get_conn: MagicMock,
+        mock_load_config: MagicMock,
+        mock_subsequent: MagicMock,
+    ) -> None:
+        """GIVEN buyer protection enabled WHEN scan runs THEN scam fields are
+        persisted and the cost breakdown reaches send_alert."""
+        from home_ops.models.data_storage import DuckDBConnection
+        from home_ops.models.schema import (
+            BuyerProtectionConfig,
+            Listing,
+            ScheduleConfig,
+            ScoringThresholds,
+        )
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=0)
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig(max_alerts_per_day=10)
+        mock_load_config.return_value.buyer_protection = BuyerProtectionConfig()
+        mock_send_alert.return_value = True
+
+        listing = Listing(
+            content_hash="scam_wired_001",
+            url="https://test.com/scam-wired",
+            address="Calle Scam Wire 1",
+            price=Decimal("300000"),
+            m2=85.0,
+            floor="2",
+            certificado_energetico_present=True,
+        )
+        mock_subsequent.return_value = [listing]
+        # Seed one row so the scan takes the incremental (subsequent_run) path
+        db.insert_listing(Listing(content_hash="seed_scan"))
+
+        _run_scan()
+
+        # Scam fields persisted to the row despite insert-before-score ordering
+        stored = db.get_listing("scam_wired_001")
+        assert stored is not None
+        assert stored["scam_flags"] == []
+        assert stored["scam_risk_score"] == 0.0
+        assert stored["total_acquisition_cost"] is not None
+        assert stored["total_acquisition_cost"] > Decimal("300000")
+
+        # Cost breakdown wired through as the 4th arg to the real alerter
+        call_args = mock_send_alert.call_args
+        assert call_args is not None
+        assert len(call_args[0]) == 4
+        assert call_args[0][3] is not None
+
+    @patch("home_ops.scraper.lifecycle.subsequent_run")
+    @patch("home_ops.cli.app.load_config")
+    @patch("home_ops.cli.app.get_connection")
+    @patch("home_ops.scraper.lifecycle.cold_start")
+    @patch("home_ops.alerter.telegram.TelegramAlerter.send_alert")
+    def test_scan_persists_scam_fields_below_threshold(
+        self,
+        mock_send_alert: MagicMock,
+        mock_cold_start: MagicMock,
+        mock_get_conn: MagicMock,
+        mock_load_config: MagicMock,
+        mock_subsequent: MagicMock,
+    ) -> None:
+        """GIVEN listing gated below the alert threshold WHEN scan runs THEN
+        scam fields are still persisted before the gate."""
+        from home_ops.models.data_storage import DuckDBConnection
+        from home_ops.models.schema import (
+            BuyerProtectionConfig,
+            Listing,
+            ScheduleConfig,
+            ScoringThresholds,
+        )
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+        mock_load_config.return_value.portal_url = "https://test.url"
+        mock_load_config.return_value.scoring = ScoringThresholds(min_score_to_alert=95)
+        mock_load_config.return_value.hitl_approval_required = False
+        mock_load_config.return_value.telegram_chat_id = ""
+        mock_load_config.return_value.euribor_rate = 3.5
+        mock_load_config.return_value.alert_schedule = ScheduleConfig(max_alerts_per_day=10)
+        mock_load_config.return_value.buyer_protection = BuyerProtectionConfig()
+
+        listing = Listing(
+            content_hash="scam_wired_002",
+            url="https://test.com/scam-wired-2",
+            address="Calle Scam Wire 2",
+            price=Decimal("300000"),
+            m2=85.0,
+            floor="2",
+            certificado_energetico_present=True,
+        )
+        mock_subsequent.return_value = [listing]
+        # Seed one row so the scan takes the incremental (subsequent_run) path
+        db.insert_listing(Listing(content_hash="seed_scan"))
+
+        _run_scan()
+
+        # No alert sent, but the score output is still recorded
+        mock_send_alert.assert_not_called()
+        stored = db.get_listing("scam_wired_002")
+        assert stored is not None
+        assert stored["total_acquisition_cost"] is not None
+
+
 class TestNextRunTime:
     """Tests for _next_run_time pure function."""
 

@@ -10,6 +10,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
 from home_ops.alerter.telegram import TelegramAlerter
 from home_ops.models.schema import Listing
+from home_ops.scorer.models import AcquisitionCostBreakdown
 
 
 class TestTelegramAlerter:
@@ -87,6 +88,97 @@ class TestTelegramAlerter:
         listing = Listing(content_hash="ghi", url="https://test.com/flags")
         result = alerter.send_alert(listing, score=75.0, flags=["certificado_missing"])
         assert result is False
+
+
+class TestBuyerProtectionMessage:
+    """Scenario 3.1/3.2 — checklist + financial reality rendered in alerts."""
+
+    @staticmethod
+    def _listing() -> Listing:
+        return Listing(
+            content_hash="bp_msg_001",
+            url="https://test.com/bp",
+            address="Calle Buyer 7",
+            price=Decimal("250000.00"),
+            m2=85.0,
+        )
+
+    @staticmethod
+    def _cost_breakdown() -> AcquisitionCostBreakdown:
+        """Resale 250k: ITP 8% (20000) + notary 1.5% (3750) = 273750 total."""
+        return AcquisitionCostBreakdown(
+            purchase_price=Decimal("250000.00"),
+            property_type="resale",
+            tax_type="ITP",
+            tax_rate=0.08,
+            tax_amount=Decimal("20000.00"),
+            notary_registry_fee=Decimal("3750.00"),
+            total_acquisition_cost=Decimal("273750.00"),
+            monthly_mortgage_payment=Decimal("1077.71"),
+            mortgage_effort_ratio=0.539,
+            high_effort_flag=True,
+        )
+
+    def test_alert_renders_five_checks(self) -> None:
+        """GIVEN cost breakdown WHEN formatted THEN message contains 5 checklist checks."""
+        message = TelegramAlerter._format_listing_message(
+            self._listing(), 85.0, cost_breakdown=self._cost_breakdown()
+        )
+        assert "Checklist comprador" in message
+        assert "Nota Simple" in message
+        assert "deuda cero" in message.lower()
+        assert "notario independiente" in message.lower()
+        assert "38/1999" in message
+        assert "plusval" in message.lower()
+
+    def test_alert_renders_itemized_outlay(self) -> None:
+        """GIVEN cost breakdown WHEN formatted THEN price + taxes + notary = total."""
+        message = TelegramAlerter._format_listing_message(
+            self._listing(), 85.0, cost_breakdown=self._cost_breakdown()
+        )
+        assert "250,000.00" in message  # listing price
+        assert "20,000.00" in message  # ITP tax
+        assert "3,750.00" in message  # notary + registry
+        assert "273,750.00" in message  # estimated total outlay
+
+    def test_alert_high_mortgage_effort_warning(self) -> None:
+        """GIVEN high_effort_flag WHEN formatted THEN warning line present."""
+        message = TelegramAlerter._format_listing_message(
+            self._listing(), 85.0, cost_breakdown=self._cost_breakdown()
+        )
+        assert "esfuerzo" in message.lower()
+
+    def test_alert_without_breakdown_keeps_legacy_format(self) -> None:
+        """GIVEN no cost breakdown WHEN formatted THEN no new blocks (rollback path)."""
+        message = TelegramAlerter._format_listing_message(self._listing(), 85.0)
+        assert "Checklist comprador" not in message
+        assert "Coste real de compra" not in message
+
+    def test_send_alert_forwards_cost_breakdown_to_message(self) -> None:
+        """GIVEN send_alert with cost_breakdown WHEN sent THEN message includes checklist."""
+        alerter = TelegramAlerter(bot_token="123:abc", chat_id="-456")
+        alerter._app = MagicMock()
+        alerter._app.send_message = AsyncMock(return_value=None)
+
+        cost = AcquisitionCostBreakdown(
+            purchase_price=Decimal("100000.00"),
+            property_type="new_build",
+            tax_type="IVA+AJD",
+            tax_rate=0.115,
+            tax_amount=Decimal("11500.00"),
+            notary_registry_fee=Decimal("1500.00"),
+            total_acquisition_cost=Decimal("113000.00"),
+            monthly_mortgage_payment=Decimal("257.31"),
+            mortgage_effort_ratio=0.086,
+            high_effort_flag=False,
+        )
+        result = alerter.send_alert(
+            self._listing(), score=80.0, cost_breakdown=cost
+        )
+        assert result is True
+        sent_text = alerter._app.send_message.call_args.kwargs["text"]
+        assert "113,000.00" in sent_text  # new build total outlay
+        assert "Checklist comprador" in sent_text
 
 
 class TestSendAlertRetries:

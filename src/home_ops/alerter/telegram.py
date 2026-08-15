@@ -17,6 +17,8 @@ from typing import Any
 from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from home_ops.models.schema import Listing
+from home_ops.scorer.checklist import BuyerProtectionChecklist
+from home_ops.scorer.models import AcquisitionCostBreakdown
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +86,22 @@ class TelegramAlerter:
                 logger.exception("Failed to create Telegram Bot")
                 self._app = None
 
-    def send_alert(self, listing: Listing, score: float, flags: list[str] | None = None) -> bool:
+    def send_alert(
+        self,
+        listing: Listing,
+        score: float,
+        flags: list[str] | None = None,
+        cost_breakdown: AcquisitionCostBreakdown | None = None,
+    ) -> bool:
         """Send a Telegram message about a scored listing.
 
         Args:
             listing: The listing to notify about.
             score: The combined score for this listing (0–100).
             flags: Optional scoring flags (warnings) to include in the message.
+            cost_breakdown: Optional acquisition cost breakdown; when present
+                the buyer-protection checklist and financial reality block are
+                appended to the message.
 
         Returns:
             True if the message was sent, False otherwise (missing/invalid
@@ -103,7 +114,7 @@ class TelegramAlerter:
             )
             return False
 
-        message = self._format_listing_message(listing, score, flags)
+        message = self._format_listing_message(listing, score, flags, cost_breakdown)
         for attempt in range(RETRIES + 1):
             try:
                 self._run_sync(self._app.send_message(chat_id=self.chat_id, text=message))
@@ -137,7 +148,10 @@ class TelegramAlerter:
 
     @staticmethod
     def _format_listing_message(
-        listing: Listing, score: float, flags: list[str] | None = None
+        listing: Listing,
+        score: float,
+        flags: list[str] | None = None,
+        cost_breakdown: AcquisitionCostBreakdown | None = None,
     ) -> str:
         """Format a listing as a human-readable Telegram message.
 
@@ -145,6 +159,9 @@ class TelegramAlerter:
             listing: The listing to format.
             score: The computed score.
             flags: Optional scoring flags to include as warnings.
+            cost_breakdown: Optional acquisition cost breakdown; when present
+                the buyer-protection checklist and itemized financial reality
+                block are appended.
 
         Returns:
             A plain-text message suitable for ``send_message``.
@@ -157,6 +174,37 @@ class TelegramAlerter:
         ]
         if flags:
             parts.append(f"⚠️ {' · '.join(flags)}")
+        if cost_breakdown is not None:
+            parts.extend(TelegramAlerter._format_buyer_protection(cost_breakdown))
         if listing.url:
             parts.append(f"🔗 {listing.url}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _format_buyer_protection(cost: AcquisitionCostBreakdown) -> list[str]:
+        """Build the buyer-protection checklist and financial reality blocks.
+
+        Returns:
+            List of message lines (Spanish user-facing Telegram copy).
+        """
+        lines: list[str] = [""]
+        lines.append("🛡️ *Checklist comprador*")
+        for item in BuyerProtectionChecklist.items():
+            lines.append(f"☐ {item.title} — {item.description}")
+        lines.append("")
+        lines.append("💶 *Coste real de compra*")
+        lines.append(f"Precio: {cost.purchase_price:,.2f} €")
+        lines.append(
+            f"Impuestos ({cost.tax_type} {cost.tax_rate:.1%}): "
+            f"{cost.tax_amount:,.2f} €"
+        )
+        lines.append(
+            f"Notaría + Registro (~1.5%): {cost.notary_registry_fee:,.2f} €"
+        )
+        lines.append(f"*Total estimado: {cost.total_acquisition_cost:,.2f} €*")
+        if cost.high_effort_flag:
+            lines.append(
+                f"⚠️ Esfuerzo hipotecario alto "
+                f"({cost.mortgage_effort_ratio:.0%} de ingresos netos)"
+            )
+        return lines

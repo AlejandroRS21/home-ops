@@ -311,4 +311,45 @@ class TestGetListing:
         assert result is None
 
 
+class TestUpdateListingScamFields:
+    """Scenario 6.1 — post-score scam-field persistence via UPDATE."""
+
+    def test_update_persists_scam_fields(self, db: DuckDBConnection) -> None:
+        """GIVEN inserted listing WHEN scam fields updated THEN values round-trip."""
+        listing = Listing(content_hash="scam_update_001", price=Decimal("150000.00"))
+        assert db.insert_listing(listing) is not None
+
+        db.update_listing_scam_fields(
+            "scam_update_001",
+            ["SCAM_RED_FLAG_TEXT", "MISSING_ENERGY_CERT"],
+            50.0,
+            Decimal("164250.00"),
+        )
+
+        stored = db.get_listing("scam_update_001")
+        assert stored is not None
+        assert stored["scam_flags"] == ["SCAM_RED_FLAG_TEXT", "MISSING_ENERGY_CERT"]
+        assert stored["scam_risk_score"] == 50.0
+        assert stored["total_acquisition_cost"] == Decimal("164250.00")
+
+    def test_update_clears_cost_and_flags(self, db: DuckDBConnection) -> None:
+        """GIVEN row with prior scam values WHEN updated to neutral THEN fields clear."""
+        listing = Listing(
+            content_hash="scam_update_002",
+            price=Decimal("150000.00"),
+            scam_flags=["SCAM_RED_FLAG_TEXT"],
+            scam_risk_score=40.0,
+            total_acquisition_cost=Decimal("164250.00"),
+        )
+        assert db.insert_listing(listing) is not None
+
+        db.update_listing_scam_fields("scam_update_002", [], 0.0, None)
+
+        stored = db.get_listing("scam_update_002")
+        assert stored is not None
+        assert stored["scam_flags"] == []
+        assert stored["scam_risk_score"] == 0.0
+        assert stored["total_acquisition_cost"] is None
+
+
 

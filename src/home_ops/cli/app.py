@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -25,6 +26,7 @@ from home_ops.config.loader import load_config
 from home_ops.models.data_storage import get_connection
 from home_ops.models.schema import Listing, ScheduleConfig
 from home_ops.scorer import RulesScorer
+from home_ops.scorer.models import AcquisitionCostBreakdown, ScoreResult
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,26 @@ def _get_daily_alert_count(conn: Any) -> int:
         [today_start],
     ).fetchone()
     return row[0] if row else 0
+
+
+def _scam_fields_from_result(
+    score_result: ScoreResult,
+) -> tuple[list[str], float, Decimal | None]:
+    """Map a ScoreResult to the persisted (scam_flags, risk_score, cost) triple.
+
+    Buyer protection is opt-in, so breakdowns may be None — neutral
+    values are returned then.
+    """
+    scam_flags = score_result.scam_breakdown.red_flags if score_result.scam_breakdown else []
+    scam_risk_score = (
+        score_result.scam_breakdown.risk_score if score_result.scam_breakdown else 0.0
+    )
+    total_acquisition_cost = (
+        score_result.cost_breakdown.total_acquisition_cost
+        if score_result.cost_breakdown
+        else None
+    )
+    return scam_flags, scam_risk_score, total_acquisition_cost
 
 
 def _run_daemon_cycle(
@@ -431,7 +453,9 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
 
         # 2. Process new listings (if any)
         if listings:
-            scored: list[tuple[Listing, float, list[str]]] = []
+            scored: list[
+                tuple[Listing, float, list[str], AcquisitionCostBreakdown | None]
+            ] = []
 
             for listing in listings:
                 inserted_id = db.insert_listing(listing)
@@ -448,6 +472,19 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 # Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
                 score_result = scorer.score(listing, db_conn=db.conn)
                 score_value = score_result.total * 100.0
+
+                # Persist scam-risk fields regardless of alert gating, so the
+                # buyer-protection output survives even when no alert is sent
+                listing.scam_flags, listing.scam_risk_score, listing.total_acquisition_cost = (
+                    _scam_fields_from_result(score_result)
+                )
+                db.update_listing_scam_fields(
+                    listing.content_hash,
+                    listing.scam_flags,
+                    listing.scam_risk_score,
+                    listing.total_acquisition_cost,
+                )
+
                 if score_result.flags:
                     console.print(
                         f"  [yellow]Flags:[/yellow] {', '.join(score_result.flags)}"
@@ -456,7 +493,9 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                     f"  [cyan]Scored:[/cyan] {listing.address or listing.url} "
                     f"→ [bold]{score_value:.1f}[/bold] (threshold {threshold})"
                 )
-                scored.append((listing, score_value, score_result.flags))
+                scored.append(
+                    (listing, score_value, score_result.flags, score_result.cost_breakdown)
+                )
 
             # Alert gating
             approval_required = config.hitl_approval_required
@@ -466,7 +505,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 score_threshold=threshold,
             )
 
-            for listing, score, flags in scored:
+            for listing, score, flags, cost_breakdown in scored:
                 if score < threshold:
                     console.print(
                         f"  [dim]Alert gated (score {score:.1f} < {threshold}): "
@@ -509,7 +548,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                     )
                     continue
 
-                success = alerter.send_alert(listing, score, flags)
+                success = alerter.send_alert(listing, score, flags, cost_breakdown)
                 status = "sent" if success else "failed"
                 db.conn.execute(
                     "INSERT INTO daily_alert_log (listing_hash, status) VALUES (?, ?)",
@@ -560,6 +599,17 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             flags = score_result.flags
             score = stored_score if stored_score is not None else score_result.total * 100.0
 
+            # Backfill scam fields for rows persisted before scoring existed
+            listing.scam_flags, listing.scam_risk_score, listing.total_acquisition_cost = (
+                _scam_fields_from_result(score_result)
+            )
+            db.update_listing_scam_fields(
+                listing.content_hash,
+                listing.scam_flags,
+                listing.scam_risk_score,
+                listing.total_acquisition_cost,
+            )
+
             # Check daily alert quota
             max_per_day = config.alert_schedule.max_alerts_per_day
             daily_count = _get_daily_alert_count(db.conn)
@@ -578,7 +628,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 )
                 continue
 
-            success = alerter.send_alert(listing, score, flags)
+            success = alerter.send_alert(listing, score, flags, score_result.cost_breakdown)
             if success:
                 db.conn.execute(
                     "UPDATE pending_approvals SET alerted = TRUE WHERE listing_id = ?",
@@ -649,6 +699,17 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             score_result = scorer.score(listing, db_conn=db.conn)
             score_value = score_result.total * 100.0
 
+            # Persist scam fields before the threshold gate so data is kept
+            listing.scam_flags, listing.scam_risk_score, listing.total_acquisition_cost = (
+                _scam_fields_from_result(score_result)
+            )
+            db.update_listing_scam_fields(
+                listing.content_hash,
+                listing.scam_flags,
+                listing.scam_risk_score,
+                listing.total_acquisition_cost,
+            )
+
             if score_value < threshold:
                 console.print(
                     f"  [dim]Alert gated (queued re-attempt, score {score_value:.1f} "
@@ -656,7 +717,9 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 )
                 continue
 
-            success = alerter.send_alert(listing, score_value, score_result.flags)
+            success = alerter.send_alert(
+                listing, score_value, score_result.flags, score_result.cost_breakdown
+            )
             status = 'sent' if success else 'failed'
             db.conn.execute(
                 "UPDATE daily_alert_log SET status = ?, sent_at = ? WHERE id = ?",

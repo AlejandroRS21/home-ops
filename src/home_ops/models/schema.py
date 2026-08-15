@@ -37,7 +37,7 @@ class Listing(BaseModel):
         description="Aggregate scam-risk penalty in points (higher = riskier)",
     )
     total_acquisition_cost: Decimal | None = Field(
-        None, description="Estimated total outlay incl. taxes and fees"
+        default=None, description="Estimated total outlay incl. taxes and fees"
     )
 
 

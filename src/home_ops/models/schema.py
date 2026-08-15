@@ -28,6 +28,52 @@ class Listing(BaseModel):
     description: str = ""
     portal: str = "idealista"
     fetched_at: datetime = Field(default_factory=datetime.now)
+    scam_flags: list[str] = Field(
+        default_factory=list,
+        description="Active scam-risk flags, e.g. SCAM_RED_FLAG_TEXT",
+    )
+    scam_risk_score: float = Field(
+        default=0.0,
+        description="Aggregate scam-risk penalty in points (higher = riskier)",
+    )
+    total_acquisition_cost: Decimal | None = Field(
+        default=None, description="Estimated total outlay incl. taxes and fees"
+    )
+
+
+class BuyerProtectionConfig(BaseModel):
+    """Buyer-protection configuration: scam weights, tax rates, mortgage limits.
+
+    All values come from user_profile.yml ``buyer_protection`` block; zero
+    hardcoded values in code.
+    """
+
+    regional_itp_rates: dict[str, float] = Field(
+        default_factory=lambda: {
+            "madrid": 0.06,
+            "catalunya": 0.10,
+            "andalucia": 0.07,
+        }
+    )
+    default_itp_rate: float = 0.08
+    scam_weights: dict[str, float] = Field(
+        default_factory=lambda: {
+            "red_flag_text": 40.0,
+            "price_bait": 30.0,
+            "missing_cert": 10.0,
+        }
+    )
+    red_flag_patterns: list[str] = Field(
+        default_factory=lambda: [
+            r"solo\s+whatsapp",
+            r"reserva\s+antes\s+de\s+visitar",
+            r"fuera\s+del\s+pa[ií]s",
+            r"pago\s+por\s+bizum",
+        ]
+    )
+    mortgage_income_ceiling: float = 0.35
+    down_payment_pct: float = 0.20
+    mortgage_years: int = 30
 
 
 class ScoringThresholds(BaseModel):
@@ -114,3 +160,4 @@ class Config(BaseModel):
     telegram_chat_id: str = ""
     scoring: ScoringThresholds | None = None
     alert_schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    buyer_protection: BuyerProtectionConfig | None = None

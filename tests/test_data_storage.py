@@ -85,6 +85,85 @@ class TestDuckDBConnection:
         db.init_db()  # second call should not raise
 
 
+class TestScamColumnsMigration:
+    """Scenario 5.1 — scam columns added idempotently and round-trip."""
+
+    @staticmethod
+    def _listings_columns(db: DuckDBConnection) -> set[str]:
+        rows = db.conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'listings'"
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def test_init_db_adds_scam_columns(self, db: DuckDBConnection) -> None:
+        """GIVEN fresh init_db WHEN inspected THEN scam columns exist."""
+        columns = self._listings_columns(db)
+        assert "scam_flags" in columns
+        assert "scam_risk_score" in columns
+        assert "total_acquisition_cost" in columns
+
+    def test_init_db_scam_columns_idempotent(self, db: DuckDBConnection) -> None:
+        """GIVEN re-run init_db WHEN inspected THEN columns still exist, no error."""
+        db.init_db()
+        db.init_db()
+        columns = self._listings_columns(db)
+        assert "scam_flags" in columns
+        assert "scam_risk_score" in columns
+        assert "total_acquisition_cost" in columns
+
+    def test_init_db_migrates_legacy_listings_table(self) -> None:
+        """GIVEN pre-existing table without scam columns WHEN init_db THEN columns added."""
+        conn = DuckDBConnection(":memory:")
+        conn.connect()
+        # Simulate a legacy DB whose listings table predates buyer protection
+        conn.conn.execute(
+            "CREATE TABLE listings (id BIGINT PRIMARY KEY, content_hash TEXT"
+            " UNIQUE NOT NULL, price DECIMAL(10,2));"
+        )
+        conn.init_db()
+        try:
+            rows = conn.conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'listings'"
+            ).fetchall()
+            columns = {r[0] for r in rows}
+            assert "scam_flags" in columns
+            assert "scam_risk_score" in columns
+            assert "total_acquisition_cost" in columns
+        finally:
+            conn.close()
+
+    def test_insert_listing_preserves_scam_fields(self, db: DuckDBConnection) -> None:
+        """GIVEN listing with scam fields WHEN inserted THEN values round-trip."""
+        listing = Listing(
+            content_hash="scam_store_001",
+            price=Decimal("150000.00"),
+            scam_flags=["SCAM_RED_FLAG_TEXT", "SCAM_SUSPECT_PRICE_BAIT"],
+            scam_risk_score=70.0,
+            total_acquisition_cost=Decimal("164250.00"),
+        )
+        listing_id = db.insert_listing(listing)
+        assert listing_id is not None
+
+        stored = db.get_listing("scam_store_001")
+        assert stored is not None
+        assert stored["scam_flags"] == ["SCAM_RED_FLAG_TEXT", "SCAM_SUSPECT_PRICE_BAIT"]
+        assert stored["scam_risk_score"] == 70.0
+        assert stored["total_acquisition_cost"] == Decimal("164250.00")
+
+    def test_insert_listing_default_scam_fields(self, db: DuckDBConnection) -> None:
+        """GIVEN plain listing WHEN inserted THEN scam columns default."""
+        listing = Listing(content_hash="scam_default_001", price=Decimal("200000.00"))
+        assert db.insert_listing(listing) is not None
+
+        stored = db.get_listing("scam_default_001")
+        assert stored is not None
+        assert stored["scam_flags"] == []
+        assert stored["scam_risk_score"] == 0.0
+        assert stored["total_acquisition_cost"] is None
+
+
 class TestNewTables:
     """Tests for scraping_runs and daily_alert_log tables."""
 

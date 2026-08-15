@@ -515,3 +515,162 @@ class TestDetailFieldActivation:
         dim_names = {d.name for d in result.dimensions}
         assert "garage" not in dim_names
         assert "energy_cert" not in dim_names
+
+
+# ===================================================================
+# Scenario 4.1 — Buyer-protection penalties in RulesScorer
+# ===================================================================
+
+
+class TestRulesScorerBuyerProtection:
+    """Net score = base - scam penalties; risk flags appended (scenario 4.1)."""
+
+    @staticmethod
+    def _config() -> Config:
+        """Config with scoring thresholds AND buyer protection enabled."""
+        from home_ops.models.schema import BuyerProtectionConfig
+
+        return Config(
+            scoring=ScoringThresholds(
+                weights={
+                    "price": 0.35,
+                    "size": 0.25,
+                    "energy_cert": 0.15,
+                    "garage": 0.10,
+                    "affordability": 0.15,
+                },
+                price_median=250_000.0,
+                price_over_median_penalty=0.30,
+                m2_threshold=80.0,
+                m2_large_threshold=120.0,
+                affordability_high_ratio=0.50,
+                affordability_medium_ratio=0.30,
+                salary_province=30_000.0,
+                min_score_to_alert=70.0,
+            ),
+            buyer_protection=BuyerProtectionConfig(),
+        )
+
+    @staticmethod
+    def _listing(
+        *,
+        content_hash: str = "bp_001",
+        price: Decimal | None = Decimal("250000"),
+        m2: float | None = 100.0,
+        certificado_energetico_present: bool | None = True,
+        garage_price: Decimal | None = Decimal("15000"),
+        description: str = "",
+    ) -> Listing:
+        from home_ops.models.schema import Listing
+
+        return Listing(
+            content_hash=content_hash,
+            price=price,
+            m2=m2,
+            certificado_energetico_present=certificado_energetico_present,
+            garage_price=garage_price,
+            description=description,
+        )
+
+    def test_red_flag_penalty_subtracted_from_net_score(self) -> None:
+        """GIVEN red-flag description WHEN scored THEN net = base - 40/100."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        scam = self._listing(description="Contacto solo whatsapp")
+        clean = self._listing()
+
+        result = scorer.score(scam, euribor_rate_override=3.5)
+        base = scorer.score(clean, euribor_rate_override=3.5).total
+
+        assert result.total == pytest.approx(base - 0.40, abs=1e-9)
+        assert "SCAM_RED_FLAG_TEXT" in result.flags
+        assert result.scam_breakdown is not None
+        assert result.scam_breakdown.total_penalty == 40.0
+
+    def test_price_bait_penalty_subtracted_from_net_score(self) -> None:
+        """GIVEN price >30% below zone median WHEN scored THEN net = base - 30/100."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        # 150k is 40% below the price_median (250k) used as micro-zone median
+        scam = self._listing(price=Decimal("150000"), description="")
+        clean = self._listing(price=Decimal("150000"), description="")
+        # Same listing shape; penalty must come only from the anomaly flag.
+
+        scorer2 = RulesScorer(Config(scoring=self._config().scoring))  # no buyer protection
+        base = scorer2.score(clean, euribor_rate_override=3.5).total
+
+        result = scorer.score(scam, euribor_rate_override=3.5)
+        assert result.total == pytest.approx(base - 0.30, abs=1e-9)
+        assert "SCAM_SUSPECT_PRICE_BAIT" in result.flags
+        assert result.scam_breakdown is not None
+        assert result.scam_breakdown.price_anomaly_detected is True
+
+    def test_missing_cert_penalty_subtracted(self) -> None:
+        """GIVEN cert None WHEN scored THEN net = base - 10/100."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        scam = self._listing(certificado_energetico_present=None)
+
+        result = scorer.score(scam, euribor_rate_override=3.5)
+        assert "MISSING_ENERGY_CERT" in result.flags
+        assert result.scam_breakdown is not None
+        assert result.scam_breakdown.total_penalty == 10.0
+
+    def test_clean_listing_no_penalty_when_protection_enabled(self) -> None:
+        """GIVEN clean listing WHEN scored THEN total unchanged, no scam flags."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        clean = self._listing()
+        result = scorer.score(clean, euribor_rate_override=3.5)
+        assert result.scam_breakdown is not None
+        assert result.scam_breakdown.total_penalty == 0.0
+        assert not any(f.startswith("SCAM_") for f in result.flags)
+
+    def test_score_result_carries_cost_breakdown(self) -> None:
+        """GIVEN buyer protection enabled WHEN scored THEN cost breakdown computed."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        listing = self._listing(price=Decimal("150000"))
+        result = scorer.score(listing, euribor_rate_override=3.5)
+        assert result.cost_breakdown is not None
+        # 150k resale: ITP 8% (12000) + notary 1.5% (2250) = 164250
+        assert result.cost_breakdown.total_acquisition_cost == Decimal("164250.00")
+        assert result.cost_breakdown.property_type == "resale"
+
+    def test_without_buyer_protection_no_breakdowns(self, config_with_scoring: Config) -> None:
+        """GIVEN config without buyer_protection WHEN scored THEN no breakdowns."""
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(config_with_scoring)
+        listing = Listing(
+            content_hash="bp_none_001",
+            price=Decimal("250000"),
+            m2=100.0,
+            certificado_energetico_present=True,
+            garage_price=Decimal("15000"),
+        )
+        result = scorer.score(listing, euribor_rate_override=3.5)
+        assert result.scam_breakdown is None
+        assert result.cost_breakdown is None
+
+    def test_net_score_never_negative(self) -> None:
+        """GIVEN heavy penalties WHEN scored THEN total clamped at 0.0."""
+        from home_ops.scorer.rules import RulesScorer
+
+        scorer = RulesScorer(self._config())
+        # tiny price -> low base; red flag + price bait + missing cert = 80 pts
+        listing = self._listing(
+            price=Decimal("100000"),
+            m2=30.0,
+            certificado_energetico_present=None,
+            description="solo whatsapp pago por bizum",
+        )
+        result = scorer.score(listing, euribor_rate_override=3.5)
+        assert result.total >= 0.0
+        assert "MISSING_ENERGY_CERT" in result.flags

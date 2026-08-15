@@ -105,7 +105,12 @@ class ScoreResult:
             causing proportional weight redistribution among remaining
             dimensions.
         flags: Informational flags discovered during scoring, e.g.
-            ``["certificado_missing"]``.
+            ``["certificado_missing"]`` or scam flags like
+            ``["SCAM_RED_FLAG_TEXT"]``.
+        scam_breakdown: Buyer-protection scam-risk breakdown, or None when
+            buyer protection is not configured.
+        cost_breakdown: Itemized acquisition cost breakdown, or None when
+            buyer protection is not configured.
     """
 
     total: float
@@ -114,3 +119,5 @@ class ScoreResult:
     computed_at: datetime | None = None
     weights_adjusted: bool = False
     flags: list[str] = field(default_factory=list)
+    scam_breakdown: ScamRiskBreakdown | None = None
+    cost_breakdown: AcquisitionCostBreakdown | None = None

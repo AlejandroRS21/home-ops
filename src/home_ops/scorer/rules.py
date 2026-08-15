@@ -15,9 +15,16 @@ from typing import Any, cast
 
 import pydantic
 
-from home_ops.models.schema import Config, Listing
+from home_ops.models.schema import BuyerProtectionConfig, Config, Listing
 from home_ops.scorer.affordability import score_affordability
-from home_ops.scorer.models import DimensionScore, ScoreResult
+from home_ops.scorer.cost_calculator import AcquisitionCostCalculator
+from home_ops.scorer.models import (
+    AcquisitionCostBreakdown,
+    DimensionScore,
+    ScamRiskBreakdown,
+    ScoreResult,
+)
+from home_ops.scorer.scam_risk import ScamRiskScorer
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +61,13 @@ class RulesScorer:
         self._validate_weights()
         # Store configured euribor fallback (from config or hardcoded default)
         self._euribor_fallback = getattr(config, "euribor_rate", 3.5)
+        # Buyer protection is opt-in: only active when a real model is present
+        buyer_protection = getattr(config, "buyer_protection", None)
+        self._buyer_protection = (
+            cast("BuyerProtectionConfig", buyer_protection)
+            if isinstance(buyer_protection, pydantic.BaseModel)
+            else None
+        )
 
     def _validate_weights(self) -> None:
         """Ensure configured weights sum to 1.0 (within 1e-6 tolerance).
@@ -153,6 +167,23 @@ class RulesScorer:
 
         total = sum(d.score * d.weight for d in dims)
 
+        # Buyer-protection pass: subtract scam penalties, compute cost breakdown
+        scam_breakdown: ScamRiskBreakdown | None = None
+        cost_breakdown: AcquisitionCostBreakdown | None = None
+        if self._buyer_protection is not None:
+            scam_breakdown = ScamRiskScorer(self._buyer_protection).evaluate(
+                listing,
+                zone_median=Decimal(str(self.thresholds.price_median)),
+            )
+            total = max(0.0, total - scam_breakdown.total_penalty / 100.0)
+            flags.extend(scam_breakdown.red_flags)
+            cost_breakdown = AcquisitionCostCalculator(self._buyer_protection).calculate(
+                listing,
+                net_monthly_income=Decimal(str(self.thresholds.salary_province))
+                / Decimal("12"),
+                euribor_rate=self._get_euribor_rate(db_conn, euribor_rate_override),
+            )
+
         return ScoreResult(
             total=total,
             dimensions=dims,
@@ -160,6 +191,8 @@ class RulesScorer:
             computed_at=datetime.now(UTC),
             weights_adjusted=weights_adjusted,
             flags=flags,
+            scam_breakdown=scam_breakdown,
+            cost_breakdown=cost_breakdown,
         )
 
     # ------------------------------------------------------------------

@@ -266,6 +266,72 @@ class TestAlertScheduleYAML:
 
     def test_old_time_key_backward_compat(self) -> None:
         """GIVEN old 'time' key in alert_schedule WHEN loaded THEN maps to daily_time."""
+
+    # ------------------------------------------------------------------
+    # Buyer protection block parsing
+    # ------------------------------------------------------------------
+
+    def test_buyer_protection_block_parsing(self) -> None:
+        """GIVEN buyer_protection block WHEN loaded THEN BuyerProtectionConfig populated."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+            "buyer_protection": {
+                "regional_itp_rates": {"madrid": 0.06, "valencia": 0.10},
+                "default_itp_rate": 0.09,
+                "scam_weights": {"red_flag_text": 50.0, "price_bait": 20.0, "missing_cert": 5.0},
+                "red_flag_patterns": [r"solo\s+whatsapp", r"pago\s+por\sbizum"],
+                "mortgage_income_ceiling": 0.30,
+                "down_payment_pct": 0.25,
+                "mortgage_years": 25,
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            bp = config.buyer_protection
+            assert bp is not None
+            assert bp.regional_itp_rates == {"madrid": 0.06, "valencia": 0.10}
+            assert bp.default_itp_rate == 0.09
+            assert bp.scam_weights == {"red_flag_text": 50.0, "price_bait": 20.0, "missing_cert": 5.0}
+            assert bp.red_flag_patterns == [r"solo\s+whatsapp", r"pago\s+por\sbizum"]
+            assert bp.mortgage_income_ceiling == 0.30
+            assert bp.down_payment_pct == 0.25
+            assert bp.mortgage_years == 25
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def test_buyer_protection_missing_block_uses_defaults(self) -> None:
+        """GIVEN no buyer_protection block WHEN loaded THEN defaults are used."""
+        yaml_data = {
+            "portal": {"idealista_url": "https://test.url"},
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as f:
+            yaml.dump(yaml_data, f)
+            tmp_path = Path(f.name)
+
+        try:
+            config = load_config(tmp_path)
+            bp = config.buyer_protection
+            assert bp is not None
+            assert bp.default_itp_rate == 0.08
+            assert bp.regional_itp_rates == {
+                "madrid": 0.06,
+                "catalunya": 0.10,
+                "andalucia": 0.07,
+            }
+            assert bp.scam_weights == {
+                "red_flag_text": 40.0,
+                "price_bait": 30.0,
+                "missing_cert": 10.0,
+            }
+            assert bp.mortgage_income_ceiling == 0.35
+            assert bp.down_payment_pct == 0.20
+            assert bp.mortgage_years == 30
+        finally:
+            tmp_path.unlink(missing_ok=True)
         yaml_data = {
             "portal": {"idealista_url": "https://test.url"},
             "alert_schedule": {

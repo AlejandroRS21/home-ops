@@ -44,3 +44,23 @@ euribor_rate: 3.5  # Current Euribor rate (%)
 # Scraper configuration
 scraper:
   max_pages_per_scan: 5  # Maximum pages to scan per cold start
+
+# Buyer protection: scam-risk detection + acquisition cost transparency
+buyer_protection:
+  regional_itp_rates:
+    madrid: 0.06
+    catalunya: 0.10
+    andalucia: 0.07
+  default_itp_rate: 0.08  # Fallback ITP when Autonomous Community is ambiguous (range 4-10%)
+  scam_weights:
+    red_flag_text: 40.0  # NLP red-flag phrase match
+    price_bait: 30.0     # Price >30% below micro-zone median
+    missing_cert: 10.0   # Missing / unknown energy cert
+  red_flag_patterns:
+    - 'solo\s+whatsapp'
+    - 'reserva\s+antes\s+de\s+visitar'
+    - 'fuera\s+del\s+pa[ií]s'
+    - 'pago\s+por\s+bizum'
+  mortgage_income_ceiling: 0.35  # Max mortgage effort ratio (30-35% band)
+  down_payment_pct: 0.20         # Typical Spanish mortgage covers 80%
+  mortgage_years: 30

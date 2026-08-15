@@ -8,7 +8,12 @@ from typing import Any
 import yaml
 from dotenv import dotenv_values
 
-from home_ops.models.schema import Config, ScheduleConfig, ScoringThresholds
+from home_ops.models.schema import (
+    BuyerProtectionConfig,
+    Config,
+    ScheduleConfig,
+    ScoringThresholds,
+)
 
 
 def load_user_profile(path: Path | None = None) -> dict[str, Any]:
@@ -92,10 +97,17 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
         alert_raw["daily_time"] = alert_raw.pop("time")
     schedule_config = ScheduleConfig(**alert_raw) if alert_raw else ScheduleConfig()
 
+    # Parse buyer_protection section; missing block falls back to defaults
+    buyer_raw = raw.get("buyer_protection", {}) or {}
+    buyer_protection = (
+        BuyerProtectionConfig(**buyer_raw) if buyer_raw else BuyerProtectionConfig()
+    )
+
     return Config(
         portal_url=raw.get("portal", {}).get("idealista_url", ""),
         scoring=scoring,
         alert_schedule=schedule_config,
+        buyer_protection=buyer_protection,
         hitl_approval_required=raw.get("hitl_approval_required", True),
         euribor_rate=raw.get("euribor_rate", 3.5),
         telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),

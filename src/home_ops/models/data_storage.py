@@ -82,6 +82,19 @@ class DuckDBConnection:
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        # Buyer-protection columns (idempotent for existing databases)
+        self.conn.execute(
+            "ALTER TABLE listings ADD COLUMN IF NOT EXISTS "
+            "scam_flags VARCHAR[] DEFAULT [];"
+        )
+        self.conn.execute(
+            "ALTER TABLE listings ADD COLUMN IF NOT EXISTS "
+            "scam_risk_score DOUBLE DEFAULT 0;"
+        )
+        self.conn.execute(
+            "ALTER TABLE listings ADD COLUMN IF NOT EXISTS "
+            "total_acquisition_cost DECIMAL(10,2);"
+        )
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_approvals (
                 listing_id INTEGER PRIMARY KEY,
@@ -139,8 +152,9 @@ class DuckDBConnection:
                 INSERT INTO listings (
                     content_hash, external_id, url, address, m2, floor,
                     price, garage_price, price_includes_garage,
-                    certificado_energetico_present, rooms, description, portal
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    certificado_energetico_present, rooms, description, portal,
+                    scam_flags, scam_risk_score, total_acquisition_cost
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (content_hash) DO NOTHING
                 RETURNING id;
                 """,
@@ -158,6 +172,9 @@ class DuckDBConnection:
                     listing.rooms,
                     listing.description,
                     listing.portal,
+                    listing.scam_flags,
+                    listing.scam_risk_score,
+                    listing.total_acquisition_cost,
                 ],
             )
             row = result.fetchone()

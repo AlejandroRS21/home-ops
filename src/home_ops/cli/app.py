@@ -35,10 +35,9 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(
     help="Home-Ops: Real estate agentic pipeline — scrape, score, alert.",
     no_args_is_help=True,
+    callback=configure_logging,
 )
 console = Console()
-
-configure_logging()
 
 # Shared Typer argument for optional config path
 ConfigPathArg = Annotated[

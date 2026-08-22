@@ -64,8 +64,10 @@ def price_evolution_by_week(db: DuckDBConnection, zone: str | None = None) -> li
     Optional ``zone`` filters by slug (e.g. 'chiclana-de-la-frontera-cadiz').
     """
     where = "WHERE price > 0 AND m2 > 0"
+    params: list[Any] = []
     if zone is not None:
-        where += f" AND zone = '{zone}'"
+        where += " AND zone = ?"
+        params.append(zone)
     rows = db.conn.execute(
         f"""
         SELECT
@@ -77,7 +79,8 @@ def price_evolution_by_week(db: DuckDBConnection, zone: str | None = None) -> li
         {where}
         GROUP BY week
         ORDER BY week ASC
-        """
+        """,
+        params,
     ).fetchall()
     assert rows is not None
     return [

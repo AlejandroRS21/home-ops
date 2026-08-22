@@ -24,6 +24,7 @@ from rich.table import Table
 from home_ops.alerter.telegram import TelegramAlerter
 from home_ops.config.loader import load_config
 from home_ops.enricher import catastro, llm_analyzer
+from home_ops.logging_setup import configure_logging
 from home_ops.models.data_storage import get_connection
 from home_ops.models.schema import Listing, ScheduleConfig
 from home_ops.scorer import RulesScorer
@@ -36,6 +37,8 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+configure_logging()
 
 # Shared Typer argument for optional config path
 ConfigPathArg = Annotated[

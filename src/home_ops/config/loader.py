@@ -12,6 +12,7 @@ from home_ops.models.schema import (
     BuyerProtectionConfig,
     CatastroConfig,
     Config,
+    LlmConfig,
     ScheduleConfig,
     ScoringThresholds,
 )
@@ -73,6 +74,9 @@ def load_env(env_path: Path | None = None) -> dict[str, str]:
         or values.get("TELEGRAM_CHAT_ID")
         or os.environ.get("CHAT_ID", "")
         or os.environ.get("TELEGRAM_CHAT_ID", ""),
+        "AI_BASE_URL": values.get("AI_BASE_URL") or os.environ.get("AI_BASE_URL", ""),
+        "AI_API_KEY": values.get("AI_API_KEY") or os.environ.get("AI_API_KEY", ""),
+        "AI_MODEL": values.get("AI_MODEL") or os.environ.get("AI_MODEL", ""),
     }
 
 
@@ -109,12 +113,22 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
     catastro_raw = raw.get("catastro", {}) or {}
     catastro = CatastroConfig(**catastro_raw) if catastro_raw else CatastroConfig()
 
+    # Parse llm section; enabled/model from YAML, secrets from env (AI_* vars)
+    llm_raw = raw.get("llm", {}) or {}
+    llm = LlmConfig(
+        enabled=llm_raw.get("enabled", False),
+        model=secrets.get("AI_MODEL", "") or llm_raw.get("model", ""),
+        base_url=secrets.get("AI_BASE_URL", ""),
+        api_key=secrets.get("AI_API_KEY", ""),
+    )
+
     return Config(
         portal_url=raw.get("portal", {}).get("idealista_url", ""),
         scoring=scoring,
         alert_schedule=schedule_config,
         buyer_protection=buyer_protection,
         catastro=catastro,
+        llm=llm,
         hitl_approval_required=raw.get("hitl_approval_required", True),
         euribor_rate=raw.get("euribor_rate", 3.5),
         telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),

@@ -85,6 +85,21 @@ class CatastroConfig(BaseModel):
 
     enabled: bool = False
 
+
+class LlmConfig(BaseModel):
+    """LLM (litellm) enrichment configuration.
+
+    Disabled by default. When enabled, ``model``/base_url/api_key are
+    supplied via env vars (AI_MODEL/AI_BASE_URL/AI_API_KEY, loaded in
+    config/loader.py) so nothing secret lives in user_profile.yml.
+    """
+
+    enabled: bool = False
+    model: str = ""
+    base_url: str = ""
+    api_key: str = ""
+
+
 class ScoringThresholds(BaseModel):
     """Scoring thresholds and weights driven by user_profile.yml.
 
@@ -171,3 +186,4 @@ class Config(BaseModel):
     alert_schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     buyer_protection: BuyerProtectionConfig | None = None
     catastro: CatastroConfig = Field(default_factory=CatastroConfig)
+    llm: LlmConfig = Field(default_factory=LlmConfig)

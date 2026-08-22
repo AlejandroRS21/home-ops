@@ -23,7 +23,7 @@ from rich.table import Table
 
 from home_ops.alerter.telegram import TelegramAlerter
 from home_ops.config.loader import load_config
-from home_ops.enricher import catastro
+from home_ops.enricher import catastro, llm_analyzer
 from home_ops.models.data_storage import get_connection
 from home_ops.models.schema import Listing, ScheduleConfig
 from home_ops.scorer import RulesScorer
@@ -473,9 +473,20 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 if config.catastro.enabled:
                     catastro.lookup(listing, config.portal_url, db)
 
+                # Optional LLM description enrichment (best-effort, opt-in).
+                # Persists the raw call for traceability; red_flags_llm are
+                # surfaced as score flags without altering the numeric score.
+                llm_flags: list[str] = []
+                if config.llm.enabled:
+                    llm_result = llm_analyzer.analyze_description(listing, config, db)
+                    if llm_result is not None and llm_result.red_flags_llm:
+                        llm_flags = llm_result.red_flags_llm
+
                 # Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
                 score_result = scorer.score(listing, db_conn=db.conn)
                 score_value = score_result.total * 100.0
+                if llm_flags:
+                    score_result.flags.extend(llm_flags)
 
                 # Persist scam-risk fields regardless of alert gating, so the
                 # buyer-protection output survives even when no alert is sent

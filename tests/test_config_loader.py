@@ -40,9 +40,13 @@ def test_load_env_missing_warns() -> None:
     with pytest.warns(UserWarning) as record:
         result = load_env(Path("/nonexistent/.env"))
     # Dead API keys (Gemini/Apify) must not be part of the secrets surface.
+    # AI_* vars are the active LLM config surface.
     expected = {
         "TELEGRAM_BOT_TOKEN": "",
         "CHAT_ID": "",
+        "AI_BASE_URL": "",
+        "AI_API_KEY": "",
+        "AI_MODEL": "",
     }
     assert result == expected
     message = str(record[0].message)
@@ -87,7 +91,13 @@ def test_load_env_excludes_dead_api_keys() -> None:
         assert result["CHAT_ID"] == ""
         assert "GEMINI_API_KEY" not in result
         assert "APIFY_API_TOKEN" not in result
-        assert set(result.keys()) == {"TELEGRAM_BOT_TOKEN", "CHAT_ID"}
+        assert set(result.keys()) == {
+            "TELEGRAM_BOT_TOKEN",
+            "CHAT_ID",
+            "AI_BASE_URL",
+            "AI_API_KEY",
+            "AI_MODEL",
+        }
     finally:
         tmp_path.unlink(missing_ok=True)
 

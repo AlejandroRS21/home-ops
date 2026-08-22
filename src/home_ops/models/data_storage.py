@@ -152,6 +152,20 @@ class DuckDBConnection:
                 fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS llm_analysis (
+                listing_id BIGINT PRIMARY KEY,
+                estado_reforma TEXT,
+                orientacion TEXT,
+                ruido_zona TEXT,
+                red_flags_llm VARCHAR[] DEFAULT [],
+                model_used TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                raw_response TEXT,
+                analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
     def insert_listing(self, listing: Listing) -> int | None:
         """Insert a listing with atomic dedup via content_hash.

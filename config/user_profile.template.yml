@@ -67,4 +67,7 @@ buyer_protection:
 
 # Catastro OVC enrichment: official surface/usage/age data (best-effort)
 catastro:
-  enabled: false
+  enabled: false  # Optional: Catastro OVC enrichment (free public service)
+
+llm:
+  enabled: false  # Optional: LLM description enrichment (needs AI_* env vars)

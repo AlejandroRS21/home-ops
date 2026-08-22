@@ -23,6 +23,7 @@ from rich.table import Table
 
 from home_ops.alerter.telegram import TelegramAlerter
 from home_ops.config.loader import load_config
+from home_ops.enricher import catastro
 from home_ops.models.data_storage import get_connection
 from home_ops.models.schema import Listing, ScheduleConfig
 from home_ops.scorer import RulesScorer
@@ -468,6 +469,9 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                         f"  [dim]Skipped (duplicate): {listing.address or listing.url}[/dim]"
                     )
                     continue
+
+                if config.catastro.enabled:
+                    catastro.lookup(listing, config.portal_url, db)
 
                 # Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
                 score_result = scorer.score(listing, db_conn=db.conn)

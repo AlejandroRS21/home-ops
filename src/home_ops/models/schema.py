@@ -76,6 +76,15 @@ class BuyerProtectionConfig(BaseModel):
     mortgage_years: int = 30
 
 
+class CatastroConfig(BaseModel):
+    """Catastro OVC enrichment configuration.
+
+    All values come from user_profile.yml ``catastro`` block; missing
+    block falls back to defaults (mirrors BuyerProtectionConfig).
+    """
+
+    enabled: bool = False
+
 class ScoringThresholds(BaseModel):
     """Scoring thresholds and weights driven by user_profile.yml.
 
@@ -161,3 +170,4 @@ class Config(BaseModel):
     scoring: ScoringThresholds | None = None
     alert_schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     buyer_protection: BuyerProtectionConfig | None = None
+    catastro: CatastroConfig = Field(default_factory=CatastroConfig)

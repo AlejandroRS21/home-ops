@@ -10,6 +10,7 @@ from dotenv import dotenv_values
 
 from home_ops.models.schema import (
     BuyerProtectionConfig,
+    CatastroConfig,
     Config,
     ScheduleConfig,
     ScoringThresholds,
@@ -104,11 +105,16 @@ def load_config(config_path: Path | None = None, env_path: Path | None = None) -
         BuyerProtectionConfig(**buyer_raw) if buyer_raw else None
     )
 
+    # Parse catastro section; missing block falls back to defaults
+    catastro_raw = raw.get("catastro", {}) or {}
+    catastro = CatastroConfig(**catastro_raw) if catastro_raw else CatastroConfig()
+
     return Config(
         portal_url=raw.get("portal", {}).get("idealista_url", ""),
         scoring=scoring,
         alert_schedule=schedule_config,
         buyer_protection=buyer_protection,
+        catastro=catastro,
         hitl_approval_required=raw.get("hitl_approval_required", True),
         euribor_rate=raw.get("euribor_rate", 3.5),
         telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),

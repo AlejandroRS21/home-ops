@@ -141,6 +141,17 @@ class DuckDBConnection:
                 status TEXT
             );
         """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS catastro_data (
+                listing_id BIGINT PRIMARY KEY,
+                superficie_catastro DOUBLE,
+                uso TEXT,
+                antiguedad INTEGER,
+                rc TEXT,
+                status TEXT NOT NULL,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
 
     def insert_listing(self, listing: Listing) -> int | None:
         """Insert a listing with atomic dedup via content_hash.

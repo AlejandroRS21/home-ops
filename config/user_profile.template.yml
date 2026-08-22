@@ -64,3 +64,7 @@ buyer_protection:
   mortgage_income_ceiling: 0.35  # Max mortgage effort ratio (30-35% band)
   down_payment_pct: 0.20         # Typical Spanish mortgage covers 80%
   mortgage_years: 30
+
+# Catastro OVC enrichment: official surface/usage/age data (best-effort)
+catastro:
+  enabled: false

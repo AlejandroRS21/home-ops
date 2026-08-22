@@ -5,10 +5,9 @@ exposed as small typed functions. This is the "Big Data" surface of the
 project: price distributions, per-m² economics, and a run time-series
 computed straight from the persisted pipeline state.
 
-ponytail: zone-level aggregates are out of scope until ``zone`` becomes a
-first-class ``listings`` column (it currently lives only inside
-``content_hash``); add a ``zone`` column and pass it through
-``_dicts_to_listings`` to unlock per-neighbourhood percentiles.
+ponytail: zone is derived from the portal_url slug at observation time and
+stored on ``price_history`` rows (not a listings column); per-zone
+percentiles unlock once scans record the zone consistently.
 """
 
 from __future__ import annotations
@@ -17,6 +16,79 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from home_ops.models.data_storage import DuckDBConnection
+
+
+def zone_from_portal_url(portal_url: str) -> str | None:
+    """Extract the location slug from a portal search URL.
+
+    e.g. ``https://www.idealista.com/venta-viviendas/chiclana-de-la-frontera-cadiz/``
+    -> ``"chiclana-de-la-frontera-cadiz"``. Returns None when no location
+    segment exists (transaction-type segments excluded).
+    """
+    for segment in portal_url.split("/"):
+        if (
+            "-" in segment
+            and not segment.startswith("http")
+            and segment not in ("venta-viviendas", "alquiler-viviendas")
+        ):
+            return segment
+    return None
+
+
+def price_history_stats(db: DuckDBConnection) -> dict[str, Any]:
+    """Return summary stats over ALL recorded observations (append-only)."""
+    row = db.conn.execute(
+        """
+        SELECT
+            COUNT(*) AS n,
+            COUNT(DISTINCT content_hash) AS listings,
+            AVG(price) AS mean,
+            quantile_cont(price, 0.50) AS p50
+        FROM price_history
+        WHERE price IS NOT NULL AND price > 0
+        """
+    ).fetchone()
+    assert row is not None
+    return {
+        "observations": int(row[0]),
+        "unique_listings": int(row[1]),
+        "mean": row[2],
+        "p50": row[3],
+    }
+
+
+def price_evolution_by_week(db: DuckDBConnection, zone: str | None = None) -> list[dict[str, Any]]:
+    """Return weekly mean/p50 price-per-m² from the append-only history.
+
+    The time-series that makes 'below zone median' scoring possible.
+    Optional ``zone`` filters by slug (e.g. 'chiclana-de-la-frontera-cadiz').
+    """
+    where = "WHERE price > 0 AND m2 > 0"
+    if zone is not None:
+        where += f" AND zone = '{zone}'"
+    rows = db.conn.execute(
+        f"""
+        SELECT
+            date_trunc('week', observed_at) AS week,
+            COUNT(*) AS n,
+            AVG(price / m2) AS mean_eur_m2,
+            quantile_cont(price / m2, 0.50) AS p50_eur_m2
+        FROM price_history
+        {where}
+        GROUP BY week
+        ORDER BY week ASC
+        """
+    ).fetchall()
+    assert rows is not None
+    return [
+        {
+            "week": str(r[0]),
+            "n": int(r[1]),
+            "mean_eur_m2": r[2],
+            "p50_eur_m2": r[3],
+        }
+        for r in rows
+    ]
 
 
 def price_stats(db: DuckDBConnection) -> dict[str, Any]:

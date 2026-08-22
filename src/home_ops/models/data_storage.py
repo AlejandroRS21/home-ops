@@ -166,6 +166,37 @@ class DuckDBConnection:
                 analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        # Append-only price observations: one row per listing seen per scan,
+        # capturing price changes over time (listings itself is deduped).
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS price_history (
+                content_hash TEXT NOT NULL,
+                zone TEXT,
+                price DECIMAL(10,2),
+                m2 DOUBLE,
+                observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+    def record_price_observation(
+        self,
+        content_hash: str,
+        zone: str | None,
+        price: Decimal | None,
+        m2: float | None,
+    ) -> None:
+        """Append a price observation to the append-only history.
+
+        Called for every listing seen in a scan — new or duplicate — so
+        price evolution of existing ads is captured over time.
+        """
+        try:
+            self.conn.execute(
+                "INSERT INTO price_history (content_hash, zone, price, m2) VALUES (?, ?, ?, ?)",
+                [content_hash, zone, price, m2],
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Failed to record price observation: {exc}") from exc
 
     def insert_listing(self, listing: Listing) -> int | None:
         """Insert a listing with atomic dedup via content_hash.

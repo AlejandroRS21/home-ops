@@ -353,6 +353,8 @@ def analytics() -> None:
             per_m2 = analytics_mod.price_per_m2_stats(db)
             portals = analytics_mod.portal_counts(db)
             runs = analytics_mod.runs_timeseries(db)
+            hist = analytics_mod.price_history_stats(db)
+            evolution = analytics_mod.price_evolution_by_week(db)
 
         table = Table(title="Price distribution (EUR)")
         table.add_column("Stat")
@@ -377,6 +379,23 @@ def analytics() -> None:
         console.print(table)
         console.print(m2_table)
         console.print(portal_table)
+
+        hist_summary = (
+            f"Price history: {hist['observations']} observations, "
+            f"{hist['unique_listings']} unique listings"
+        )
+        console.print(f"[dim]{hist_summary}[/dim]")
+        if evolution:
+            evo_table = Table(title="Price-per-m² evolution (weekly)")
+            evo_table.add_column("Week")
+            evo_table.add_column("N", justify="right")
+            evo_table.add_column("Mean €/m²", justify="right")
+            evo_table.add_column("P50 €/m²", justify="right")
+            for r in evolution[-10:]:
+                mean = f"{r['mean_eur_m2']:.0f}" if r["mean_eur_m2"] is not None else "—"
+                p50 = f"{r['p50_eur_m2']:.0f}" if r["p50_eur_m2"] is not None else "—"
+                evo_table.add_row(r["week"][:10], str(r["n"]), mean, p50)
+            console.print(evo_table)
 
         if runs:
             run_table = Table(title="Run time-series (per day)")
@@ -514,12 +533,26 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 raise
 
         # 2. Process new listings (if any)
+        from home_ops.analytics import zone_from_portal_url
+
+        zone = zone_from_portal_url(config.portal_url)
+
         if listings:
             scored: list[
                 tuple[Listing, float, list[str], AcquisitionCostBreakdown | None]
             ] = []
 
             for listing in listings:
+                # Append-only price observation: recorded for EVERY seen
+                # listing (new or duplicate) so price evolution over time
+                # is captured even though listings itself is deduped.
+                db.record_price_observation(
+                    listing.content_hash,
+                    zone,
+                    listing.price,
+                    listing.m2,
+                )
+
                 inserted_id = db.insert_listing(listing)
 
                 if inserted_id is not None:

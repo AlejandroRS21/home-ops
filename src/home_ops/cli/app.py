@@ -338,6 +338,64 @@ def status(
         raise typer.Exit(code=1) from exc
 
 
+@app.command()
+def analytics() -> None:
+    """Show price-distribution and run-time-series analytics (Big Data surface)."""
+    try:
+        from home_ops import analytics as analytics_mod
+
+        with get_connection(_get_db_path()) as db:
+            db.init_db()
+            prices = analytics_mod.price_stats(db)
+            per_m2 = analytics_mod.price_per_m2_stats(db)
+            portals = analytics_mod.portal_counts(db)
+            runs = analytics_mod.runs_timeseries(db)
+
+        table = Table(title="Price distribution (EUR)")
+        table.add_column("Stat")
+        table.add_column("Value", justify="right")
+        for key in ("count", "mean", "min", "max", "p25", "p50", "p75"):
+            value = prices[key]
+            table.add_row(key, f"{value:.0f}" if isinstance(value, (int, float)) else str(value))
+
+        m2_table = Table(title="Price per m² (EUR/m²)")
+        m2_table.add_column("Stat")
+        m2_table.add_column("Value", justify="right")
+        for key in ("count", "mean", "min", "max", "p25", "p50", "p75"):
+            value = per_m2[key]
+            m2_table.add_row(key, f"{value:.0f}" if isinstance(value, (int, float)) else str(value))
+
+        portal_table = Table(title="Listings by portal")
+        portal_table.add_column("Portal")
+        portal_table.add_column("Count", justify="right")
+        for portal, count in portals:
+            portal_table.add_row(portal, str(count))
+
+        console.print(table)
+        console.print(m2_table)
+        console.print(portal_table)
+
+        if runs:
+            run_table = Table(title="Run time-series (per day)")
+            run_table.add_column("Day")
+            run_table.add_column("Found", justify="right")
+            run_table.add_column("New", justify="right")
+            run_table.add_column("Alerts", justify="right")
+            for r in runs[-10:]:
+                run_table.add_row(
+                    r["day"],
+                    str(r["listings_found"]),
+                    str(r["listings_new"]),
+                    str(r["alerts_sent"]),
+                )
+            console.print(run_table)
+        else:
+            console.print("[dim]No completed scraping runs recorded yet.[/dim]")
+    except Exception as exc:
+        console.print(f"[bold red]Analytics failed:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 @app.command(name="snapshots-reset")
 def snapshots_reset() -> None:
     """Invalidate all cached scraper snapshots.

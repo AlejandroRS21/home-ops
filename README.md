@@ -20,6 +20,10 @@ No dashboards to check. No daily "I should look at Idealista" mental load. Just 
 - **Human-in-the-loop approval gate** — optional manual approval before any alert is sent, so nothing reaches your phone without your sign-off.
 - **Scheduled daemon** — runs on a daily or interval schedule with a per-day alert quota, catch-up recovery after downtime, and overlap protection.
 - **DuckDB storage** — embedded, zero-config database that persists across restarts.
+- **LLM enrichment (opt-in)** — litellm reads each description and extracts renovation state, orientation, zone noise, and LLM-judged scam red flags, persisted with full traceability.
+- **Catastro OVC enrichment (opt-in)** — free public cadastral data (surface, age, usage) cross-checked against each listing.
+- **DuckDB analytics** — `homeops analytics` computes price/price-per-m² percentiles, portal counts, and a per-day run time-series.
+- **Structured logging (opt-in)** — one JSON object per line via `HOME_OPS_LOG_JSON=1`.
 - **Docker and systemd deployment** — run it with `docker compose up` or as a hardened systemd service.
 
 Scoring dimensions and default weights:
@@ -107,6 +111,7 @@ Config lives outside the container — edit `config/user_profile.yml` and run `d
 |---------|----------|
 | `scan [CONFIG_PATH] [-f/--force]` | Run the full pipeline: scrape, deduplicate, score, alert. Cold-start and incremental modes are auto-detected; `--force` bypasses early-stop pagination. |
 | `status [CONFIG_PATH]` | Rich summary: total listings, last scan time, pending HITL approvals. |
+| `analytics` | Price distribution, price-per-m², portal counts, and per-day run time-series (DuckDB aggregates). |
 | `snapshots-reset` | Invalidate cached scraper snapshots; the next scan performs a full cold start. |
 | `approve <listing_id> [-c PATH]` | HITL gate: mark a listing as approved; alerts are sent on the next scan. |
 | `daemon [-c PATH] [--dry-run]` | Schedule loop (60s tick) in daily or interval mode, with catch-up recovery, overlap guard, and daily alert quota. |
@@ -171,8 +176,12 @@ sudo systemctl enable --now homeops
 - [x] Daemon scheduler with catch-up recovery and daily quota
 - [x] Human-in-the-loop approval gate
 - [x] Docker deployment
-- [ ] Detail page scraping (exact garage price, real energy certificate)
-- [ ] Catastro API integration for cadastral reference enrichment
+- [x] Detail page scraping (exact garage price, real energy certificate)
+- [x] Catastro OVC enrichment (free public cadastral data, opt-in)
+- [x] LLM description enrichment + scam second-opinion (litellm, opt-in)
+- [x] DuckDB analytics layer (`homeops analytics`)
+- [x] Structured JSON logging (opt-in)
+- [x] GHCR release pipeline on version tags
 - [ ] Textual TUI for real-time pipeline monitoring
 - [ ] Multi-portal support (Fotocasa, Habitaclia)
 

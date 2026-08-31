@@ -29,6 +29,9 @@ dev = [
     "mypy",
     "pytest-env",
 ]
+tui = [
+    "textual>=8.2.8",
+]
 
 [project.urls]
 repository = "https://github.com/AlejandroRS21/home-ops"
@@ -59,3 +62,8 @@ source = ["src/home_ops"]
 
 [tool.coverage.report]
 fail_under = 70
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+]

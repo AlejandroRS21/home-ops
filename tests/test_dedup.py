@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from home_ops.scraper.dedup import compute_content_hash
 
 if TYPE_CHECKING:
-    from home_ops.models.data_storage import DuckDBConnection
+    pass
 
 
 class TestComputeContentHash:

@@ -29,7 +29,6 @@ sys.modules["scrapling.parser"] = _mock_scrapling.parser
 from home_ops.models.data_storage import DuckDBConnection  # noqa: E402
 from home_ops.models.schema import Listing  # noqa: E402
 from home_ops.scraper.lifecycle import (  # noqa: E402
-    SNAPSHOT_DIR,
     invalidate_snapshots,
 )
 

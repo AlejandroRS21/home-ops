@@ -417,6 +417,17 @@ def analytics() -> None:
         raise typer.Exit(code=1) from exc
 
 
+@app.command()
+def tui() -> None:
+    """Launch the live Textual dashboard (status + analytics)."""
+    try:
+        from home_ops.tui import run as run_tui
+    except ImportError as exc:
+        console.print("[bold red]TUI needs the 'tui' extra:[/bold red] uv pip install '.[tui]'")
+        raise typer.Exit(code=1) from exc
+    run_tui(_get_db_path())
+
+
 @app.command(name="snapshots-reset")
 def snapshots_reset() -> None:
     """Invalidate all cached scraper snapshots.

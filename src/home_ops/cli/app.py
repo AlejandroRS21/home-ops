@@ -418,14 +418,14 @@ def analytics() -> None:
 
 
 @app.command()
-def tui() -> None:
-    """Launch the live Textual dashboard (status + analytics)."""
+def tui(config_path: ConfigPathArg = None) -> None:
+    """Launch the interactive control panel: scan, approve, reset, monitor."""
     try:
         from home_ops.tui import run as run_tui
     except ImportError as exc:
         console.print("[bold red]TUI needs the 'tui' extra:[/bold red] uv pip install '.[tui]'")
         raise typer.Exit(code=1) from exc
-    run_tui(_get_db_path())
+    run_tui(_get_db_path(), config_path)
 
 
 @app.command(name="snapshots-reset")

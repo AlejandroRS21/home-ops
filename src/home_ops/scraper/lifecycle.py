@@ -31,8 +31,13 @@ DETAIL_FETCH_CAP = 10
 def _fetch_page_text(fetcher: Any, url: str) -> str:
     """Fetch a URL and return the page text content.
 
+    ``real_chrome=True`` drives the system's installed Chrome (harder to
+    fingerprint than the bundled browser); ``solve_cloudflare=True`` clears
+    anti-bot challenges before returning. Both are what actually avoids the
+    Idealista 403 — the previous plain StealthyFetcher() call had neither.
+
     Args:
-        fetcher: A Scrapling fetcher/session with a ``fetch`` method.
+        fetcher: Scrapling's StealthyFetcher class (or a fetch-compatible stub).
         url: The URL to fetch.
 
     Returns:
@@ -41,7 +46,7 @@ def _fetch_page_text(fetcher: Any, url: str) -> str:
     Raises:
         RuntimeError: If the page is empty or has no text content.
     """
-    page = fetcher.fetch(url)
+    page = fetcher.fetch(url, real_chrome=True, solve_cloudflare=True)
     if page is None:
         raise RuntimeError(f"Fetcher returned None for {url}")
 
@@ -100,13 +105,17 @@ _StealthyFetcher: Any = None
 
 
 def _get_fetcher() -> Any:
-    """Return a StealthyFetcher instance, loading Scrapling on first call."""
+    """Return Scrapling's StealthyFetcher class, imported lazily on first call.
+
+    ``fetch`` is a classmethod — no instance needed (instantiating it is the
+    deprecated pre-0.3 pattern and only logs a no-op warning).
+    """
     global _StealthyFetcher  # noqa: PLW0603
     if _StealthyFetcher is None:
         from scrapling import StealthyFetcher  # noqa: PLC0415
 
         _StealthyFetcher = StealthyFetcher
-    return _StealthyFetcher()
+    return _StealthyFetcher
 
 
 def _enrich_new_listings(listings: list[Listing], fetcher: Any) -> None:

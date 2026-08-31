@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [
-    "scrapling[fetchers]>=0.4.0",
+    "scrapling[fetchers]>=0.4.15",
     "duckdb",
     "litellm",
     "python-telegram-bot",

@@ -96,6 +96,9 @@ class DuckDBConnection:
             "ALTER TABLE listings ADD COLUMN IF NOT EXISTS "
             "total_acquisition_cost DECIMAL(10,2);"
         )
+        self.conn.execute(
+            "ALTER TABLE listings ADD COLUMN IF NOT EXISTS score DOUBLE;"
+        )
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_approvals (
                 listing_id INTEGER PRIMARY KEY,
@@ -245,21 +248,24 @@ class DuckDBConnection:
         scam_flags: list[str],
         scam_risk_score: float,
         total_acquisition_cost: Decimal | None,
+        score: float | None = None,
     ) -> None:
-        """Persist post-score scam-risk fields on an existing listing row.
+        """Persist post-score scam-risk fields (and overall score) on an existing listing row.
 
-        Called after scoring so the buyer-protection output is recorded
-        even when the alert is gated. Keyed by content_hash to preserve
-        the ON CONFLICT dedup semantics of insert_listing.
+        Called after scoring so the buyer-protection output — and the score
+        itself — is recorded even when the alert is gated. Keyed by
+        content_hash to preserve the ON CONFLICT dedup semantics of
+        insert_listing.
         """
         try:
             self.conn.execute(
                 "UPDATE listings SET scam_flags = ?, scam_risk_score = ?, "
-                "total_acquisition_cost = ? WHERE content_hash = ?",
+                "total_acquisition_cost = ?, score = ? WHERE content_hash = ?",
                 [
                     scam_flags,
                     scam_risk_score,
                     total_acquisition_cost,
+                    score,
                     content_hash,
                 ],
             )

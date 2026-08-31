@@ -25,11 +25,9 @@ def index(request: Request) -> HTMLResponse:
     with get_connection(_get_db_path()) as db:
         db.init_db()
         rows = db.conn.execute(
-            """SELECT l.id, l.address, l.price, l.m2, l.url, l.portal,
-                      COALESCE(p.score, NULL) AS score
-               FROM listings l
-               LEFT JOIN pending_approvals p ON p.listing_id = l.id
-               ORDER BY l.fetched_at DESC
+            """SELECT id, address, price, m2, url, portal, score
+               FROM listings
+               ORDER BY fetched_at DESC
                LIMIT 100"""
         ).fetchall()
     listings = [

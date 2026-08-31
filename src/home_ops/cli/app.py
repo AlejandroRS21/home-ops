@@ -616,6 +616,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                     listing.scam_flags,
                     listing.scam_risk_score,
                     listing.total_acquisition_cost,
+                    score_value,
                 )
 
                 if score_result.flags:
@@ -741,6 +742,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 listing.scam_flags,
                 listing.scam_risk_score,
                 listing.total_acquisition_cost,
+                score,
             )
 
             # Check daily alert quota
@@ -841,6 +843,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                 listing.scam_flags,
                 listing.scam_risk_score,
                 listing.total_acquisition_cost,
+                score_value,
             )
 
             if score_value < threshold:

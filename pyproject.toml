@@ -25,6 +25,7 @@ apify = ["apify-client"]
 dev = [
     "pytest",
     "pytest-cov",
+    "pytest-asyncio>=1.4.0",
     "ruff",
     "mypy",
     "pytest-env",
@@ -62,8 +63,3 @@ source = ["src/home_ops"]
 
 [tool.coverage.report]
 fail_under = 70
-
-[dependency-groups]
-dev = [
-    "pytest-asyncio>=1.4.0",
-]

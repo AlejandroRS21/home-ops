@@ -428,6 +428,20 @@ def tui(config_path: ConfigPathArg = None) -> None:
     run_tui(_get_db_path(), config_path)
 
 
+@app.command()
+def web(
+    host: Annotated[str, typer.Option(help="Bind host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Bind port")] = 8000,
+) -> None:
+    """Launch the public read-only web dashboard (no login, no writes)."""
+    try:
+        import uvicorn
+    except ImportError as exc:
+        console.print("[bold red]Web needs the 'web' extra:[/bold red] uv pip install '.[web]'")
+        raise typer.Exit(code=1) from exc
+    uvicorn.run("home_ops.web:app", host=host, port=port)
+
+
 @app.command(name="snapshots-reset")
 def snapshots_reset() -> None:
     """Invalidate all cached scraper snapshots.

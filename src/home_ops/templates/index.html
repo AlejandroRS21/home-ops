@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Home-Ops — Pisos en Cádiz</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    h1 { font-size: 1.4rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { text-align: left; padding: .5rem; border-bottom: 1px solid #ddd; }
+    th { font-size: .8rem; text-transform: uppercase; color: #666; }
+    tr:hover { background: #f7f7f7; }
+    a { color: #0a58ca; text-decoration: none; }
+    .score { font-weight: 600; }
+    footer { margin-top: 2rem; font-size: .8rem; color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Home-Ops — pipeline agéntico inmobiliario (Cádiz)</h1>
+  <p>Listings scrapeados, deduplicados y scoreados automáticamente. Solo lectura.</p>
+  <table>
+    <thead>
+      <tr><th>Dirección</th><th>Precio</th><th>m²</th><th>Score</th><th>Portal</th></tr>
+    </thead>
+    <tbody>
+      {% for l in listings %}
+      <tr>
+        <td><a href="{{ l.url }}" target="_blank" rel="noopener">{{ l.address }}</a></td>
+        <td>{{ l.price }}</td>
+        <td>{{ l.m2 }}</td>
+        <td class="score">{{ l.score }}</td>
+        <td>{{ l.portal }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">Sin listings todavía — corre <code>homeops scan</code>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <footer>Home-Ops · <a href="https://github.com/AlejandroRS21/home-ops">código fuente</a></footer>
+</body>
+</html>

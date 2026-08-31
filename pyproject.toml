@@ -29,9 +29,15 @@ dev = [
     "ruff",
     "mypy",
     "pytest-env",
+    "httpx>=0.28.1",
 ]
 tui = [
     "textual>=8.2.8",
+]
+web = [
+    "fastapi>=0.141.1",
+    "jinja2>=3.1.6",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [project.urls]

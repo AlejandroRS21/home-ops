@@ -139,6 +139,33 @@ class TestColdStart:
     @patch("home_ops.scraper.lifecycle._get_fetcher")
     @patch("home_ops.scraper.lifecycle._fetch_page_text")
     @patch("home_ops.scraper.lifecycle.parse_listings")
+    def test_cold_start_handles_valueless_query_flag(
+        self, mock_parse: MagicMock, mock_fetch: MagicMock, mock_get_fetcher: MagicMock
+    ) -> None:
+        """GIVEN a URL with a valueless flag (e.g. ?debug) WHEN paginating
+        THEN it doesn't crash — manual split('=',1) would ValueError here."""
+        from home_ops.scraper.lifecycle import cold_start
+
+        mock_fetch.return_value = "<html>mock</html>"
+        mock_parse.side_effect = [
+            [{"external_id": "1", "url": "/1", "address": "a",
+              "price": None, "m2": None, "rooms": None, "floor": None,
+              "description": "", "portal": "idealista",
+              "price_includes_garage": False, "garage_price": None,
+              "certificado_energetico_present": None}],
+            [],
+        ]
+
+        result = cold_start("https://www.idealista.com/test?debug", max_pages=2)
+        assert len(result) == 1
+        # 2 pagination fetches + 1 detail enrichment fetch for the one listing
+        assert mock_fetch.call_count == 3
+        second_call_url = mock_fetch.call_args_list[1].args[1]
+        assert "pagina=2" in second_call_url
+
+    @patch("home_ops.scraper.lifecycle._get_fetcher")
+    @patch("home_ops.scraper.lifecycle._fetch_page_text")
+    @patch("home_ops.scraper.lifecycle.parse_listings")
     def test_cold_start_early_stop_on_empty(
         self, mock_parse: MagicMock, mock_fetch: MagicMock, mock_get_fetcher: MagicMock
     ) -> None:

@@ -185,9 +185,9 @@ def cold_start(url: str, zone: str = "", max_pages: int = 5) -> list[Listing]:
             page_url = url
         else:
             parsed = urlparse(url)
-            query = dict(kv.split("=", 1) for kv in parsed.query.split("&") if kv)
-            query["pagina"] = str(page_num)
-            parsed = parsed._replace(query=urlencode(query))
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            qs["pagina"] = [str(page_num)]
+            parsed = parsed._replace(query=urlencode(qs, doseq=True))
             page_url = urlunparse(parsed)
         logger.info("Fetching page %d: %s", page_num, page_url)
 

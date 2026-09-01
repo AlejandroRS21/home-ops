@@ -392,6 +392,36 @@ class TestRulesScorerZoneMedian:
             price_dim = [d for d in result.dimensions if d.name == "price"][0]
             assert price_dim.score == 1.0
 
+    def test_zone_median_ignores_stale_observations_outside_window(
+        self, config_with_scoring: Config, tmp_path
+    ) -> None:
+        """GIVEN a zone with only >90-day-old observations WHEN scored THEN
+        the rolling window excludes them (falls back to config median)."""
+        from home_ops.models.data_storage import get_connection
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        db_path = str(tmp_path / "home_ops.duckdb")
+        with get_connection(db_path) as db:
+            db.init_db()
+            # Backdate observations to 200 days ago — outside the 90-day window.
+            db.conn.execute(
+                "INSERT INTO price_history (content_hash, zone, price, m2, observed_at) "
+                "VALUES ('h', 'stale-zone', 100000, 50.0, now() - INTERVAL '200 days')"
+            )
+            scorer = RulesScorer(config_with_scoring)
+            listing = Listing(
+                content_hash="zone_003",
+                price=Decimal("250000"),  # at config median
+                m2=100.0,
+                certificado_energetico_present=True,
+                garage_price=Decimal("15000"),
+            )
+            result = scorer.score(listing, db_conn=db.conn, zone="stale-zone")
+            price_dim = [d for d in result.dimensions if d.name == "price"][0]
+            # Stale zone data ignored -> falls back to config median -> score 1.0
+            assert price_dim.score == 1.0
+
 
 # ===================================================================
 # 5.8 — Affordability integration test with DuckDB

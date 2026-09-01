@@ -146,24 +146,30 @@ def price_per_m2_stats(db: DuckDBConnection) -> dict[str, Any]:
     }
 
 
-def zone_median_price_per_m2(db_conn: Any, zone: str) -> float | None:
-    """Return the current median €/m² for a zone from the observation history.
+def zone_median_price_per_m2(
+    db_conn: Any, zone: str, window_days: int = 90
+) -> float | None:
+    """Return the current median €/m² for a zone, over a recent time window.
 
     Powers 'below zone median' scoring: replaces the static config
-    price_median with a real, self-updating baseline computed from every
-    price ever observed in that zone (price_history is append-only).
-    Returns None when the zone has no observations yet (cold start).
+    price_median with a real, rolling baseline over the last
+    ``window_days`` days of observations (default 90) so the median tracks
+    current market conditions instead of averaging in stale prices from a
+    rising/falling market. Returns None when the zone has no observations
+    in the window (cold start).
 
     Args:
         db_conn: A raw DuckDB connection (``.execute()``-capable) — same
             object the scorer already receives, not the DuckDBConnection
             wrapper used elsewhere in this module.
         zone: Zone slug to filter observations by.
+        window_days: How many days back to include (default 90).
     """
     row = db_conn.execute(
         "SELECT quantile_cont(price / m2, 0.50) FROM price_history "
-        "WHERE zone = ? AND price > 0 AND m2 > 0",
-        [zone],
+        "WHERE zone = ? AND price > 0 AND m2 > 0 "
+        "AND observed_at >= now() - (? * INTERVAL '1 day')",
+        [zone, window_days],
     ).fetchone()
     return float(row[0]) if row and row[0] is not None else None
 

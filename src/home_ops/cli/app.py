@@ -161,6 +161,7 @@ def _scam_fields_from_result(
 
 def _run_daemon_cycle(
     config: Any,
+    config_path: Path | None = None,
     run_fn: Any = None,
     now: datetime | None = None,
 ) -> bool:
@@ -228,7 +229,7 @@ def _run_daemon_cycle(
     # Execute the pipeline outside the DB context manager
     status = "success"
     try:
-        run_fn(None)  # run_fn accepts config_path; None = auto-discover
+        run_fn(config_path)  # run_fn accepts config_path; None = auto-discover
     except BaseException as exc:
         logger.error("Daemon cycle: pipeline failed: %s", exc)
         status = "failed"
@@ -247,7 +248,9 @@ def _run_daemon_cycle(
     return True
 
 
-def _run_daemon_inner_loop(config: Any, dry_run: bool = False) -> None:
+def _run_daemon_inner_loop(
+    config: Any, config_path: Path | None = None, dry_run: bool = False
+) -> None:
     """Run the daemon loop: check schedule every 60s, execute when due.
 
     Args:
@@ -280,7 +283,7 @@ def _run_daemon_inner_loop(config: Any, dry_run: bool = False) -> None:
     try:
         while True:
             cycle_now = datetime.now(UTC)
-            _run_daemon_cycle(config, now=cycle_now)
+            _run_daemon_cycle(config, config_path=config_path, now=cycle_now)
             time.sleep(60)
     except KeyboardInterrupt:
         console.print("\n[yellow]Daemon stopped by user.[/yellow]")
@@ -510,7 +513,7 @@ def daemon(
     """
     try:
         config = load_config(config_path)
-        _run_daemon_inner_loop(config, dry_run=dry_run)
+        _run_daemon_inner_loop(config, config_path=config_path, dry_run=dry_run)
     except Exception as exc:
         console.print(f"[bold red]Daemon failed:[/bold red] {exc}")
         raise typer.Exit(code=1) from exc

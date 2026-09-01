@@ -1223,6 +1223,29 @@ class TestRunDaemonCycle:
         run_fn.assert_called_once()
 
     @patch("home_ops.cli.app.get_connection")
+    def test_cycle_propagates_config_path_to_run_fn(self, mock_get_conn: MagicMock) -> None:
+        """GIVEN a custom config_path WHEN daemon cycle runs THEN run_fn
+        receives that path, not None (regression: was hardcoded to None,
+        silently ignoring --config for every scheduled scan)."""
+        from home_ops.cli.app import _run_daemon_cycle
+        from home_ops.models.schema import Config, ScheduleConfig
+        from pathlib import Path
+
+        db = DuckDBConnection(":memory:")
+        db.connect()
+        db.init_db()
+        mock_get_conn.return_value.__enter__.return_value = db
+
+        run_fn = MagicMock()
+        config = Config(alert_schedule=ScheduleConfig(timezone="UTC"))
+        now = datetime(2026, 6, 18, 9, 0, 0, tzinfo=UTC)
+        custom_path = Path("/tmp/custom_profile.yml")
+
+        _run_daemon_cycle(config, config_path=custom_path, run_fn=run_fn, now=now)
+
+        run_fn.assert_called_once_with(custom_path)
+
+    @patch("home_ops.cli.app.get_connection")
     def test_skips_when_not_due(self, mock_get_conn: MagicMock) -> None:
         """GIVEN schedule is not due WHEN _run_daemon_cycle THEN skips."""
         from home_ops.cli.app import _run_daemon_cycle

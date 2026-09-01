@@ -4,10 +4,6 @@ Pure SQL aggregations (no new dependency — DuckDB ships ``quantile_cont``)
 exposed as small typed functions. This is the "Big Data" surface of the
 project: price distributions, per-m² economics, and a run time-series
 computed straight from the persisted pipeline state.
-
-ponytail: zone is derived from the portal_url slug at observation time and
-stored on ``price_history`` rows (not a listings column); per-zone
-percentiles unlock once scans record the zone consistently.
 """
 
 from __future__ import annotations

@@ -37,3 +37,21 @@ def test_index_renders_listing(tmp_path, monkeypatch) -> None:
     assert resp.status_code == 200
     assert "Calle Falsa 123" in resp.text
     assert "150,000 €" in resp.text
+
+
+def test_index_neutralizes_unsafe_url_scheme(tmp_path, monkeypatch) -> None:
+    """javascript: URLs from the scraper must not reach the rendered href."""
+    db_path = str(tmp_path / "home_ops.duckdb")
+    with get_connection(db_path) as db:
+        db.init_db()
+        db.conn.execute(
+            "INSERT INTO listings (content_hash, address, price, m2, url) "
+            "VALUES ('h2', 'Calle Mala 1', 100000, 60, 'javascript:alert(1)')"
+        )
+    monkeypatch.setattr(web_mod, "_get_db_path", lambda: db_path)
+
+    client = TestClient(web_mod.app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "javascript:" not in resp.text
+    assert 'href="#"' in resp.text

@@ -677,6 +677,34 @@ class TestRulesScorerBuyerProtection:
         assert result.scam_breakdown is not None
         assert result.scam_breakdown.total_penalty == 40.0
 
+    def test_price_bait_uses_zone_median_when_available(self, tmp_path) -> None:
+        """GIVEN price_history for a zone WHEN scored WITH zone THEN
+        price-bait check compares against real zone €/m², not static config."""
+        from home_ops.models.data_storage import get_connection
+        from home_ops.scorer.rules import RulesScorer
+
+        db_path = str(tmp_path / "home_ops.duckdb")
+        with get_connection(db_path) as db:
+            db.init_db()
+            # Zone €/m² median = 5000 (250k/50, 500k/100 -> median 5000).
+            db.record_price_observation("h1", "test-zone", Decimal("250000"), 50.0)
+            db.record_price_observation("h2", "test-zone", Decimal("500000"), 100.0)
+
+            scorer = RulesScorer(self._config())
+            # 100m2 at 200k = 2000 EUR/m2: 60% below the zone median (5000) ->
+            # price-bait fires. But 200k is only 20% below the STATIC config
+            # price_median (250k) -> no bait without zone. Divergent verdicts
+            # prove the zone median is actually consulted, not silently ignored.
+            listing = self._listing(content_hash="bp_zone", price=Decimal("200000"), m2=100.0)
+
+            result_with_zone = scorer.score(listing, db_conn=db.conn, zone="test-zone")
+            result_without_zone = scorer.score(listing, euribor_rate_override=3.5)
+
+            assert result_with_zone.scam_breakdown is not None
+            assert result_without_zone.scam_breakdown is not None
+            assert "SCAM_SUSPECT_PRICE_BAIT" in result_with_zone.flags
+            assert "SCAM_SUSPECT_PRICE_BAIT" not in result_without_zone.flags
+
     def test_price_bait_penalty_subtracted_from_net_score(self) -> None:
         """GIVEN price >30% below zone median WHEN scored THEN net = base - 30/100."""
         from home_ops.scorer.rules import RulesScorer

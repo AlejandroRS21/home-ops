@@ -175,9 +175,16 @@ class RulesScorer:
         scam_breakdown: ScamRiskBreakdown | None = None
         cost_breakdown: AcquisitionCostBreakdown | None = None
         if self._buyer_protection is not None:
+            zone_median_for_scam = self.thresholds.price_median
+            if zone is not None and db_conn is not None and raw_m2:
+                from home_ops.analytics import zone_median_price_per_m2
+
+                per_m2 = zone_median_price_per_m2(db_conn, zone)
+                if per_m2 is not None:
+                    zone_median_for_scam = per_m2 * raw_m2
             scam_breakdown = ScamRiskScorer(self._buyer_protection).evaluate(
                 listing,
-                zone_median=Decimal(str(self.thresholds.price_median)),
+                zone_median=Decimal(str(zone_median_for_scam)),
             )
             total = max(0.0, total - scam_breakdown.total_penalty / 100.0)
             flags.extend(scam_breakdown.red_flags)

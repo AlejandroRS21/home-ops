@@ -90,6 +90,7 @@ class RulesScorer:
         listing: Listing,
         db_conn: Any = None,
         euribor_rate_override: float | None = None,
+        zone: str | None = None,
     ) -> ScoreResult:
         """Score a single listing across all configured dimensions.
 
@@ -97,6 +98,9 @@ class RulesScorer:
             listing: The listing to score.
             db_conn: Optional DuckDB connection for euribor lookup.
             euribor_rate_override: Override euribor rate for testing.
+            zone: Optional zone slug — when given (with db_conn and
+                listing.m2), price is scored against the zone's real
+                median €/m² instead of the static config price_median.
 
         Returns:
             ScoreResult with total, per-dimension breakdown, and flags.
@@ -142,7 +146,7 @@ class RulesScorer:
             weight = active_weights.get(dim_key, 0.0)
 
             if dim_key == "price":
-                score = self._score_price(raw_val)
+                score = self._score_price(raw_val, listing.m2, db_conn, zone)
             elif dim_key == "size":
                 score = self._score_size(raw_val)
             elif dim_key == "energy_cert":
@@ -231,8 +235,20 @@ class RulesScorer:
     # Per-dimension scorers
     # ------------------------------------------------------------------
 
-    def _score_price(self, price: Decimal | None) -> float:
+    def _score_price(
+        self,
+        price: Decimal | None,
+        m2: float | None = None,
+        db_conn: Any = None,
+        zone: str | None = None,
+    ) -> float:
         """Score the price dimension.
+
+        When ``zone``/``db_conn``/``m2`` are all available, compares
+        price-per-m² against the zone's real median from price_history
+        (self-updating baseline). Falls back to the static config
+        price_median (whole-price comparison) otherwise — same behaviour
+        as before for callers that don't pass zone context.
 
         Returns 1.0 if price is at or below median, linearly decreasing
         toward 0.0 as price exceeds median by the penalty threshold.
@@ -240,9 +256,22 @@ class RulesScorer:
         if price is None:
             return 0.0
 
-        median = self.thresholds.price_median
         penalty = self.thresholds.price_over_median_penalty
 
+        if zone is not None and db_conn is not None and m2:
+            from home_ops.analytics import zone_median_price_per_m2
+
+            zone_median = zone_median_price_per_m2(db_conn, zone)
+            if zone_median is not None:
+                price_per_m2 = float(price) / m2
+                if price_per_m2 <= zone_median:
+                    return 1.0
+                over_ratio = (price_per_m2 - zone_median) / zone_median
+                if over_ratio >= penalty:
+                    return 0.0
+                return 1.0 - (over_ratio / penalty)
+
+        median = self.thresholds.price_median
         if price <= median:
             return 1.0
 

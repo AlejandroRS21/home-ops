@@ -601,7 +601,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
                         llm_flags = llm_result.red_flags_llm
 
                 # Score — use RulesScorer; multiply by 100 for 0-100 threshold compatibility
-                score_result = scorer.score(listing, db_conn=db.conn)
+                score_result = scorer.score(listing, db_conn=db.conn, zone=zone)
                 score_value = score_result.total * 100.0
                 if llm_flags:
                     score_result.flags.extend(llm_flags)
@@ -729,7 +729,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             listing = Listing(**data)
 
             # Re-score to get flags; use stored score when available
-            score_result = scorer.score(listing, db_conn=db.conn)
+            score_result = scorer.score(listing, db_conn=db.conn, zone=zone)
             flags = score_result.flags
             score = stored_score if stored_score is not None else score_result.total * 100.0
 
@@ -831,7 +831,7 @@ def _run_scan(config_path: Path | None = None, force: bool = False) -> None:
             data = dict(zip(cols, row, strict=True))
             listing = Listing(**data)
 
-            score_result = scorer.score(listing, db_conn=db.conn)
+            score_result = scorer.score(listing, db_conn=db.conn, zone=zone)
             score_value = score_result.total * 100.0
 
             # Persist scam fields before the threshold gate so data is kept

@@ -334,6 +334,65 @@ class TestRulesScorerPricePartial:
         assert price_dim.score == 1.0, f"Expected score 1.0, got {price_dim.score}"
 
 
+class TestRulesScorerZoneMedian:
+    """Price dimension scored against real zone median (price_history), not static config."""
+
+    def test_uses_zone_median_when_available(
+        self, config_with_scoring: Config, tmp_path
+    ) -> None:
+        """GIVEN price_history observations for a zone WHEN scored with zone THEN
+        price dimension compares against the zone's real €/m² median, not config."""
+        from home_ops.models.data_storage import get_connection
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        db_path = str(tmp_path / "home_ops.duckdb")
+        with get_connection(db_path) as db:
+            db.init_db()
+            # Zone median €/m²: 100000/50=2000, 200000/50=4000, 150000/50=3000 → median 3000
+            for price in (100_000, 200_000, 150_000):
+                db.record_price_observation("h", "test-zone", Decimal(price), 50.0)
+
+            scorer = RulesScorer(config_with_scoring)
+            # config price_median=250000 (whole price) would score this 1.0 as
+            # a whole price, but as €/m² (3600) it's 20% above the zone median
+            # (3000) — zone-aware scoring must diverge from the static path.
+            listing = Listing(
+                content_hash="zone_001",
+                price=Decimal("180000"),
+                m2=50.0,
+                certificado_energetico_present=True,
+                garage_price=Decimal("15000"),
+            )
+            result = scorer.score(listing, db_conn=db.conn, zone="test-zone")
+            price_dim = [d for d in result.dimensions if d.name == "price"][0]
+            assert 0.0 < price_dim.score < 1.0
+
+    def test_falls_back_to_config_median_when_zone_has_no_data(
+        self, config_with_scoring: Config, tmp_path
+    ) -> None:
+        """GIVEN a zone with no price_history WHEN scored THEN falls back to
+        the static config price_median (cold-start, no regression)."""
+        from home_ops.models.data_storage import get_connection
+        from home_ops.models.schema import Listing
+        from home_ops.scorer.rules import RulesScorer
+
+        db_path = str(tmp_path / "home_ops.duckdb")
+        with get_connection(db_path) as db:
+            db.init_db()
+            scorer = RulesScorer(config_with_scoring)
+            listing = Listing(
+                content_hash="zone_002",
+                price=Decimal("250000"),  # at config median
+                m2=100.0,
+                certificado_energetico_present=True,
+                garage_price=Decimal("15000"),
+            )
+            result = scorer.score(listing, db_conn=db.conn, zone="empty-zone")
+            price_dim = [d for d in result.dimensions if d.name == "price"][0]
+            assert price_dim.score == 1.0
+
+
 # ===================================================================
 # 5.8 — Affordability integration test with DuckDB
 # ===================================================================

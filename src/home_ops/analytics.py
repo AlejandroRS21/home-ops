@@ -150,6 +150,28 @@ def price_per_m2_stats(db: DuckDBConnection) -> dict[str, Any]:
     }
 
 
+def zone_median_price_per_m2(db_conn: Any, zone: str) -> float | None:
+    """Return the current median €/m² for a zone from the observation history.
+
+    Powers 'below zone median' scoring: replaces the static config
+    price_median with a real, self-updating baseline computed from every
+    price ever observed in that zone (price_history is append-only).
+    Returns None when the zone has no observations yet (cold start).
+
+    Args:
+        db_conn: A raw DuckDB connection (``.execute()``-capable) — same
+            object the scorer already receives, not the DuckDBConnection
+            wrapper used elsewhere in this module.
+        zone: Zone slug to filter observations by.
+    """
+    row = db_conn.execute(
+        "SELECT quantile_cont(price / m2, 0.50) FROM price_history "
+        "WHERE zone = ? AND price > 0 AND m2 > 0",
+        [zone],
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
 def portal_counts(db: DuckDBConnection) -> list[tuple[str, int]]:
     """Return listing counts grouped by portal."""
     rows = db.conn.execute(
